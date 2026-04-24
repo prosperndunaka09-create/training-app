@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/components/theme-provider";
 import { LanguageProvider } from "./contexts/LanguageContext";
 import { AppProvider } from "./contexts/AppContext";
-import { AuthProvider } from "./contexts/SafeAuthProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Index from "./pages/Index";
 import Admin from "./pages/Admin";
@@ -13,7 +12,6 @@ const App = () => (
     <LanguageProvider>
       <ErrorBoundary>
         <BrowserRouter>
-          <AuthProvider>
           <AppProvider>
             <Routes>
               <Route path="/" element={<Index />} />
@@ -21,7 +19,6 @@ const App = () => (
               <Route path="*" element={<NotFound />} />
             </Routes>
           </AppProvider>
-          </AuthProvider>
         </BrowserRouter>
       </ErrorBoundary>
     </LanguageProvider>

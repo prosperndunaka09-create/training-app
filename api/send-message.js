@@ -5,15 +5,18 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8513756424:AAGvKY6eJK8ANfqC2S-5z0LlXM-YDRGbmaA';
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '7683177085';
-
 // In-memory storage for when database is unavailable
 const conversationStore = new Map();
 
 export default async function handler(req, res) {
+  // Get environment variables from request.env (for Vite plugin) or process.env (for Vercel)
+  const env = req?.env || process.env;
+  
+  const supabaseUrl = env.VITE_SUPABASE_URL;
+  const supabaseServiceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN || '8513756424:AAGvKY6eJK6ANfqC2S-5z0LlXM-YDRGbmaA';
+  const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID || '7683177085';
+  
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -28,8 +31,11 @@ export default async function handler(req, res) {
   }
 
   console.log('📩 API: Starting message processing...');
+  console.log('📩 API: Using env source:', req?.env ? 'req.env (Vite plugin)' : 'process.env (Vercel)');
   console.log('📩 API: Supabase URL exists:', !!supabaseUrl);
   console.log('📩 API: Supabase Service Key exists:', !!supabaseServiceKey);
+  console.log('📩 API: Supabase URL value:', supabaseUrl ? supabaseUrl.substring(0, 20) + '...' : 'undefined');
+  console.log('📩 API: Supabase Service Key length:', supabaseServiceKey ? supabaseServiceKey.length : 0);
 
   try {
     const { name, phone, message, userId, username } = req.body;
@@ -42,8 +48,8 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing required fields: name and message are required' });
     }
 
-    // Generate a unique user ID if not provided
-    const finalUserId = userId || `guest-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // Generate a unique user ID if not provided (use UUID for Supabase compatibility)
+    const finalUserId = userId || crypto.randomUUID();
     const finalUsername = username || name || 'Guest User';
 
     let conversationId;
@@ -79,8 +85,6 @@ export default async function handler(req, res) {
             .from('customer_conversations')
             .insert({
               user_id: finalUserId,
-              username: finalUsername,
-              phone: phone || null,
               status: 'open',
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
@@ -104,11 +108,9 @@ export default async function handler(req, res) {
             .from('customer_messages')
             .insert({
               conversation_id: conversationId,
-              sender_role: 'customer',
-              message: message,
-              source: 'website',
-              created_at: new Date().toISOString(),
-              read_at: null
+              user_id: finalUserId,
+              content: message,
+              created_at: new Date().toISOString()
             });
 
           if (msgError) {
@@ -121,6 +123,33 @@ export default async function handler(req, res) {
               .update({ updated_at: new Date().toISOString() })
               .eq('id', conversationId);
             console.log('✅ API: Message saved to database successfully');
+            
+            // Send Telegram notification ONLY after successful DB insert
+            console.log('📤 API: Sending notification to Telegram (DB save successful)');
+            console.log('📤 API: Telegram token source:', env.TELEGRAM_BOT_TOKEN ? 'env' : 'fallback');
+            console.log('📤 API: Telegram token length:', TELEGRAM_BOT_TOKEN ? TELEGRAM_BOT_TOKEN.length : 0);
+            
+            try {
+              const telegramResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: TELEGRAM_CHAT_ID,
+                  text: `🆕 NEW CUSTOMER MESSAGE\n\n👤 Name: ${name}\n📞 Phone: ${phone || 'Not provided'}\n🆔 User ID: ${finalUserId}\n💬 Message:\n${message}\n\n📝 Conversation ID: ${conversationId}\n📊 Storage: Database`,
+                  parse_mode: 'HTML'
+                })
+              });
+
+              const telegramResult = await telegramResponse.json();
+              
+              if (telegramResult.ok) {
+                console.log('✅ API: Telegram notification sent successfully');
+              } else {
+                console.error('❌ API: Telegram API error:', telegramResult);
+              }
+            } catch (telegramError) {
+              console.error('❌ API: Error sending to Telegram:', telegramError);
+            }
           }
         }
       } catch (dbError) {
@@ -139,7 +168,7 @@ export default async function handler(req, res) {
       if (existingConv && existingConv.status === 'open') {
         conversationId = existingConv.id;
         existingConv.messages.push({
-          id: `msg-${Date.now()}`,
+          id: crypto.randomUUID(),
           sender_role: 'customer',
           message: message,
           source: 'website',
@@ -149,7 +178,7 @@ export default async function handler(req, res) {
         console.log('💾 API: Message saved to in-memory conversation:', conversationId);
       } else {
         // Create new in-memory conversation
-        conversationId = `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        conversationId = crypto.randomUUID();
         conversationStore.set(finalUserId, {
           id: conversationId,
           user_id: finalUserId,
@@ -159,7 +188,7 @@ export default async function handler(req, res) {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           messages: [{
-            id: `msg-${Date.now()}`,
+            id: crypto.randomUUID(),
             sender_role: 'customer',
             message: message,
             source: 'website',
@@ -168,31 +197,6 @@ export default async function handler(req, res) {
         });
         console.log('✅ API: Created in-memory conversation:', conversationId);
       }
-    }
-
-    // ALWAYS send to Telegram
-    console.log('📤 API: Sending notification to Telegram');
-    
-    try {
-      const telegramResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: TELEGRAM_CHAT_ID,
-          text: `🆕 NEW CUSTOMER MESSAGE\n\n👤 Name: ${name}\n📞 Phone: ${phone || 'Not provided'}\n🆔 User ID: ${finalUserId}\n💬 Message:\n${message}\n\n📝 Conversation ID: ${conversationId}\n📊 Storage: ${useDatabase ? 'Database' : 'In-Memory'}`,
-          parse_mode: 'HTML'
-        })
-      });
-
-      const telegramResult = await telegramResponse.json();
-      
-      if (telegramResult.ok) {
-        console.log('✅ API: Telegram notification sent successfully');
-      } else {
-        console.error('❌ API: Telegram API error:', telegramResult);
-      }
-    } catch (telegramError) {
-      console.error('❌ API: Error sending to Telegram:', telegramError);
     }
 
     console.log('✅ API: Message processed successfully - Database:', useDatabase);

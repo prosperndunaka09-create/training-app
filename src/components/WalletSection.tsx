@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
-import { Wallet, Copy, CheckCircle, Plus, Shield, AlertCircle, Loader2, ExternalLink, History } from 'lucide-react';
+import { Wallet, Copy, CheckCircle, Plus, Shield, AlertCircle, Loader2, ExternalLink, History, DollarSign, ArrowUpRight, TrendingUp, ArrowDown } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import TransactionHistory from './TransactionHistory';
+import { type WalletState } from '@/contexts/AppContext';
 
 const WALLET_TYPES = [
   { value: 'USDT-TRC20', label: 'USDT (TRC20)', network: 'Tron Network' },
@@ -12,16 +13,16 @@ const WALLET_TYPES = [
 ];
 
 const WalletSection: React.FC = () => {
-  const { wallets, refreshWallets, addWallet, isLoading } = useAppContext();
+  const { wallets, refreshWallets, addWallet, isLoading, walletState } = useAppContext();
   const [showBindForm, setShowBindForm] = useState(false);
+  const [showWithdrawForm, setShowWithdrawForm] = useState(false);
   const [walletAddress, setWalletAddress] = useState('');
   const [walletType, setWalletType] = useState('USDT-TRC20');
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawMethod, setWithdrawMethod] = useState<'bank_transfer' | 'crypto' | 'other'>('crypto');
+  const [accountDetails, setAccountDetails] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    refreshWallets();
-  }, [refreshWallets]);
 
   const safeWallets = wallets || [];
   const primaryWallet = safeWallets.find(w => w.is_primary);
@@ -76,7 +77,7 @@ const WalletSection: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-white">Wallet Management</h2>
-          <p className="text-sm text-gray-500 mt-0.5">Bind and manage your digital wallets for withdrawals</p>
+          <p className="text-sm text-gray-500 mt-0.5">Manage your balance and withdrawal settings</p>
         </div>
         <button
           onClick={() => setShowBindForm(!showBindForm)}
@@ -86,6 +87,182 @@ const WalletSection: React.FC = () => {
           Bind Wallet
         </button>
       </div>
+
+      {/* Balance Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="p-5 bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border border-emerald-500/20 rounded-2xl">
+          <div className="flex items-center gap-2 mb-2">
+            <DollarSign className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs text-gray-400 font-medium">Available Balance</span>
+          </div>
+          <p className="text-2xl font-bold text-emerald-400">${walletState.available_balance.toFixed(2)}</p>
+        </div>
+        <div className="p-5 bg-gradient-to-br from-amber-500/10 to-amber-500/5 border border-amber-500/20 rounded-2xl">
+          <div className="flex items-center gap-2 mb-2">
+            <Loader2 className="w-4 h-4 text-amber-400" />
+            <span className="text-xs text-gray-400 font-medium">Pending Balance</span>
+          </div>
+          <p className="text-2xl font-bold text-amber-400">${walletState.pending_balance.toFixed(2)}</p>
+        </div>
+        <div className="p-5 bg-gradient-to-br from-indigo-500/10 to-indigo-500/5 border border-indigo-500/20 rounded-2xl">
+          <div className="flex items-center gap-2 mb-2">
+            <TrendingUp className="w-4 h-4 text-indigo-400" />
+            <span className="text-xs text-gray-400 font-medium">Total Earned</span>
+          </div>
+          <p className="text-2xl font-bold text-indigo-400">${walletState.total_earned.toFixed(2)}</p>
+        </div>
+        <div className="p-5 bg-gradient-to-br from-purple-500/10 to-purple-500/5 border border-purple-500/20 rounded-2xl">
+          <div className="flex items-center gap-2 mb-2">
+            <ArrowDown className="w-4 h-4 text-purple-400" />
+            <span className="text-xs text-gray-400 font-medium">Total Withdrawn</span>
+          </div>
+          <p className="text-2xl font-bold text-purple-400">${walletState.total_withdrawn.toFixed(2)}</p>
+        </div>
+      </div>
+
+      {/* Withdraw Button */}
+      <button
+        onClick={() => setShowWithdrawForm(!showWithdrawForm)}
+        disabled={walletState.available_balance < 10}
+        className="w-full p-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold rounded-2xl transition-all shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <ArrowUpRight size={20} />
+        Request Withdrawal
+        <span className="text-sm opacity-80">(${walletState.available_balance.toFixed(2)} available)</span>
+      </button>
+
+      {/* Withdrawal Form */}
+      {showWithdrawForm && (
+        <div className="p-6 bg-emerald-500/5 border border-emerald-500/20 rounded-2xl">
+          <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+            <ArrowUpRight size={18} className="text-emerald-400" />
+            Request Withdrawal
+          </h3>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const amount = parseFloat(withdrawAmount);
+            if (isNaN(amount) || amount < 10) {
+              setErrors({ amount: 'Minimum withdrawal is $10' });
+              return;
+            }
+            if (amount > walletState.available_balance) {
+              setErrors({ amount: 'Insufficient available balance' });
+              return;
+            }
+            if (!accountDetails.trim()) {
+              setErrors({ accountDetails: 'Account details are required' });
+              return;
+            }
+            // For now, just show a toast (backend integration later)
+            toast({
+              title: 'Withdrawal Request Submitted',
+              description: `Withdrawal of $${amount.toFixed(2)} via ${withdrawMethod} submitted for processing.`
+            });
+            setShowWithdrawForm(false);
+            setWithdrawAmount('');
+            setAccountDetails('');
+            setErrors({});
+          }} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">Amount (USD)</label>
+              <input
+                type="number"
+                value={withdrawAmount}
+                onChange={e => { setWithdrawAmount(e.target.value); setErrors({}); }}
+                placeholder="10.00"
+                min="10"
+                max={walletState.available_balance}
+                step="0.01"
+                className="w-full px-4 py-3 bg-[#1a2038] border border-emerald-500/20 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono text-sm"
+              />
+              {errors.amount && (
+                <p className="flex items-center gap-1 text-red-400 text-xs mt-1.5">
+                  <AlertCircle size={12} /> {errors.amount}
+                </p>
+              )}
+              <p className="text-xs text-gray-500 mt-1">Available: ${walletState.available_balance.toFixed(2)} | Minimum: $10.00</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">Withdrawal Method</label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setWithdrawMethod('crypto'); setErrors({}); }}
+                  className={`p-3 rounded-xl border text-left transition-all ${
+                    withdrawMethod === 'crypto'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 ring-1 ring-emerald-500/30'
+                      : 'bg-white/[0.02] border-white/[0.06] hover:border-white/10'
+                  }`}
+                >
+                  <div className={`text-sm font-semibold ${withdrawMethod === 'crypto' ? 'text-emerald-300' : 'text-gray-300'}`}>
+                    Crypto
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setWithdrawMethod('bank_transfer'); setErrors({}); }}
+                  className={`p-3 rounded-xl border text-left transition-all ${
+                    withdrawMethod === 'bank_transfer'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 ring-1 ring-emerald-500/30'
+                      : 'bg-white/[0.02] border-white/[0.06] hover:border-white/10'
+                  }`}
+                >
+                  <div className={`text-sm font-semibold ${withdrawMethod === 'bank_transfer' ? 'text-emerald-300' : 'text-gray-300'}`}>
+                    Bank
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setWithdrawMethod('other'); setErrors({}); }}
+                  className={`p-3 rounded-xl border text-left transition-all ${
+                    withdrawMethod === 'other'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 ring-1 ring-emerald-500/30'
+                      : 'bg-white/[0.02] border-white/[0.06] hover:border-white/10'
+                  }`}
+                >
+                  <div className={`text-sm font-semibold ${withdrawMethod === 'other' ? 'text-emerald-300' : 'text-gray-300'}`}>
+                    Other
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">Account Details</label>
+              <textarea
+                value={accountDetails}
+                onChange={e => { setAccountDetails(e.target.value); setErrors({}); }}
+                placeholder={withdrawMethod === 'crypto' ? 'USDT-TRC20 Address: T...' : withdrawMethod === 'bank_transfer' ? 'Bank Name, Account Number, Routing Number...' : 'Enter your payment details...'}
+                rows={3}
+                className="w-full px-4 py-3 bg-[#1a2038] border border-emerald-500/20 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all text-sm resize-none"
+              />
+              {errors.accountDetails && (
+                <p className="flex items-center gap-1 text-red-400 text-xs mt-1.5">
+                  <AlertCircle size={12} /> {errors.accountDetails}
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowWithdrawForm(false); setErrors({}); setWithdrawAmount(''); setAccountDetails(''); }}
+                className="flex-1 py-3 bg-white/5 border border-white/10 text-gray-300 font-semibold rounded-xl hover:bg-white/10 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isLoading || !withdrawAmount || parseFloat(withdrawAmount) < 10}
+                className="flex-1 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isLoading ? <><Loader2 size={16} className="animate-spin" /> Processing...</> : 'Submit Request'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Bind Wallet Form */}
       {showBindForm && (
@@ -248,8 +425,46 @@ const WalletSection: React.FC = () => {
             <History size={18} className="text-indigo-400" />
             Transaction History
           </h3>
+          <span className="text-xs text-gray-500">{walletState.transactions.length} transactions</span>
         </div>
-        <TransactionHistory />
+        {walletState.transactions.length === 0 ? (
+          <div className="text-center py-8">
+            <History className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+            <p className="text-gray-400">No transactions yet</p>
+          </div>
+        ) : (
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {walletState.transactions.map((tx) => (
+              <div key={tx.id} className="flex items-center gap-4 p-3 bg-white/[0.02] rounded-xl border border-white/[0.04]">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                  tx.type === 'task_reward' || tx.type === 'bonus' ? 'bg-emerald-500/10' :
+                  tx.type === 'withdrawal_request' ? 'bg-amber-500/10' :
+                  tx.type === 'withdrawal_completed' ? 'bg-purple-500/10' :
+                  tx.status === 'failed' ? 'bg-red-500/10' : 'bg-indigo-500/10'
+                }`}>
+                  {tx.type === 'task_reward' || tx.type === 'bonus' ? (
+                    <DollarSign size={20} className="text-emerald-400" />
+                  ) : tx.type === 'withdrawal_request' ? (
+                    <Loader2 size={20} className="text-amber-400" />
+                  ) : tx.type === 'withdrawal_completed' ? (
+                    <CheckCircle size={20} className="text-purple-400" />
+                  ) : (
+                    <History size={20} className="text-indigo-400" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white truncate">{tx.description}</p>
+                  <p className="text-xs text-gray-500">{new Date(tx.created_at).toLocaleString()}</p>
+                </div>
+                <div className={`text-sm font-bold ${
+                  tx.amount > 0 ? 'text-emerald-400' : 'text-red-400'
+                }`}>
+                  {tx.amount > 0 ? '+' : ''}${tx.amount.toFixed(2)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Security Info */}

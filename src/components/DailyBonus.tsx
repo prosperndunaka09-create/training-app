@@ -228,18 +228,33 @@ const DailyBonus: React.FC = () => {
     setBonusState(newState);
     saveDailyBonusState(user.id, newState);
 
-    // Update user balance in AppContext via localStorage
+    // Update user balance in Supabase (primary source for dashboard)
     try {
-      const savedUser = localStorage.getItem('opt_user');
-      if (savedUser) {
-        const u = JSON.parse(savedUser);
-        u.balance = (u.balance || 0) + dailyReward;
-        u.total_earned = (u.total_earned || 0) + dailyReward;
-        localStorage.setItem('opt_user', JSON.stringify(u));
-        // Force a page-level state refresh
-        window.dispatchEvent(new Event('daily-bonus-claimed'));
+      const { supabase } = await import('@/lib/supabase');
+      const { error } = await supabase
+        .from('users')
+        .update({
+          balance: (user.balance || 0) + dailyReward,
+          total_earned: (user.total_earned || 0) + dailyReward
+        })
+        .eq('id', user.id);
+      
+      if (error) {
+        console.error('Failed to update balance in Supabase:', error);
+        // Fallback to localStorage if Supabase fails
+        const savedUser = localStorage.getItem('opt_user');
+        if (savedUser) {
+          const u = JSON.parse(savedUser);
+          u.balance = (u.balance || 0) + dailyReward;
+          u.total_earned = (u.total_earned || 0) + dailyReward;
+          localStorage.setItem('opt_user', JSON.stringify(u));
+        }
       }
-    } catch {}
+      // Force a page-level state refresh
+      window.dispatchEvent(new Event('daily-bonus-claimed'));
+    } catch (error) {
+      console.error('Error updating balance:', error);
+    }
 
     setPhase('success');
 

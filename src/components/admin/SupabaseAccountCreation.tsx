@@ -32,6 +32,7 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
   const [personalName, setPersonalName] = useState('');
   const [personalPhone, setPersonalPhone] = useState('');
   const [personalReferral, setPersonalReferral] = useState('');
+  const personalReferralPattern = /^OPT-[A-Z0-9]{6}$/;
 
   // Generate referral codes
   const generateReferralCode = () => {
@@ -50,8 +51,9 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
       return;
     }
 
-    if (trainingReferral.length < 8) {
-      toast.error('Referral code must be at least 8 characters');
+    const normalizedTrainingReferral = trainingReferral.trim().toUpperCase();
+    if (!personalReferralPattern.test(normalizedTrainingReferral)) {
+      toast.error('User referral code must match OPT-XXXXXX format');
       return;
     }
 
@@ -79,7 +81,7 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
         balance: 1100,
         total_earned: 0,
         referral_code: referralCode,
-        referred_by: trainingReferral || null,
+        referred_by: normalizedTrainingReferral,
         training_completed: false,
         training_phase: 1,
         trigger_task_number: null,
@@ -175,7 +177,7 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
       }
 
       // Generate personal referral code
-      const referralCode = 'USR-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+      const referralCode = 'OPT-' + Math.random().toString(36).substring(2, 8).toUpperCase();
 
       // Create personal account in Supabase
       const newUser = await SupabaseService.createUser({
@@ -359,8 +361,8 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
               <Input
                 id="training-referral"
                 value={trainingReferral}
-                onChange={(e) => setTrainingReferral(e.target.value)}
-                placeholder="Enter user referral code"
+                onChange={(e) => setTrainingReferral(e.target.value.toUpperCase())}
+                placeholder="OPT-ABC123"
                 className="bg-slate-700 border-slate-600 text-white"
               />
             </div>

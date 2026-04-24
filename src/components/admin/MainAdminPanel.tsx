@@ -95,44 +95,63 @@ const MainAdminPanel: React.FC = () => {
 
   // Check auth status on mount and subscribe to real-time updates
   useEffect(() => {
-    const saved = localStorage.getItem('main_admin_authenticated');
-    if (saved === 'true') {
-      setIsAuthenticated(true);
-      loadData();
+  const checkSession = async () => {
+    const { data: sessionData } = await supabase.auth.getSession();
+
+    console.log('[MainAdmin] ADMIN SESSION:', sessionData.session ? 'Authenticated' : 'No session');
+    console.log('[MainAdmin] Session data:', sessionData);
+
+    if (!sessionData.session) {
+      window.location.href = '/';
+      return;
     }
+  };
 
-    // Subscribe to real-time users changes
-    const usersSubscription = supabase
-      .channel('users-changes')
-      .on('postgres_changes', 
-        { event: '*', schema: 'public', table: 'users' },
-        (payload) => {
-          console.log('[MainAdmin] Real-time update received:', payload);
-          loadData();
-        }
-      )
-      .subscribe();
+  checkSession();
 
-    return () => {
-      usersSubscription.unsubscribe();
-    };
-  }, []);
+  // Listen for auth state changes
+  const { data: { subscription: authSubscription } } =
+    supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[MainAdmin] Auth state changed:', session ? 'Authenticated' : 'No session');
+    });
 
-  const loadData = useCallback(async (showRefreshToast = false) => {
+  // Subscribe to real-time users changes
+  const usersSubscription = supabase
+    .channel('users-changes')
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'users' },
+      (payload) => {
+        console.log('[MainAdmin] Real-time update received:', payload);
+        loadData();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    authSubscription.unsubscribe();
+    usersSubscription.unsubscribe();
+  };
+
+}, []);
+
+    
+  
+
+  const loadData = async (showRefreshToast = false) => {
     setIsLoading(true);
     console.log('[MainAdmin] Starting data load...');
     
     // Add timeout to prevent infinite loading
-    const timeoutId = setTimeout(() => {
-      console.error('[MainAdmin] Data load timed out after 30 seconds');
-      setIsLoading(false);
-      setIsRefreshing(false);
-      toast({ 
-        title: 'Error', 
-        description: 'Data load timed out. Please check your connection and try again.',
-        variant: 'destructive'
-      });
-    }, 30000);
+    // const timeoutId = setTimeout(() => {
+    //   console.error('[MainAdmin] Data load timed out after 30 seconds');
+    //   setIsLoading(false);
+    //   setIsRefreshing(false);
+    //   toast({ 
+    //     title: 'Error', 
+    //     description: 'Data load timed out. Please check your connection and try again.',
+    //     variant: 'destructive'
+    //   });
+    // }, 30000);
     
     try {
       console.log('[MainAdmin] Loading data from Supabase...');
@@ -150,7 +169,7 @@ const MainAdminPanel: React.FC = () => {
       if (connectionError) {
         console.error('[MainAdmin] Connection test failed:', connectionError);
         setConnectionStatus('error');
-        clearTimeout(timeoutId);
+        
         setIsLoading(false);
         setIsRefreshing(false);
         toast({ 
@@ -273,11 +292,11 @@ const MainAdminPanel: React.FC = () => {
         variant: 'destructive'
       });
     } finally {
-      clearTimeout(timeoutId);
+      
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();

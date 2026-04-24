@@ -55,7 +55,7 @@ interface User {
   referral_code: string;
   created_at: string;
   last_login: string;
-  status: 'active' | 'suspended' | 'banned';
+  status: 'active' | 'suspended' | 'banned' | 'deleted';
 }
 
 interface AdminUsersProps {
@@ -72,77 +72,83 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showUserDetails, setShowUserDetails] = useState(false);
+  const [showBalanceModal, setShowBalanceModal] = useState(false);
+  const [showVipModal, setShowVipModal] = useState(false);
+  const [balanceAmount, setBalanceAmount] = useState('');
+  const [balanceAction, setBalanceAction] = useState<'add' | 'deduct'>('add');
+  const [balanceReason, setBalanceReason] = useState('');
+  const [vipLevel, setVipLevel] = useState(1);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // Check authentication state on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      console.log('[AdminUsers] ADMIN SESSION:', sessionData.session ? 'Authenticated' : 'Not authenticated');
+      console.log('[AdminUsers] Session data:', sessionData);
+      setIsAuthenticated(!!sessionData.session);
+    };
+
+    checkAuth();
+
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log('[AdminUsers] Auth state changed:', session ? 'Authenticated' : 'Not authenticated');
+      setIsAuthenticated(!!session);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const loadUsers = useCallback(async () => {
     setIsLoading(true);
     try {
-      // Read real users from localStorage
-      const loadedUsers: User[] = [];
-      
-      // Search through localStorage for user accounts
-      if (typeof window !== 'undefined') {
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key) {
-            // Check for user accounts (opt_user, opt_account_*, training_account_*)
-            if (key === 'opt_user' || key.startsWith('opt_account_') || key.startsWith('training_account_')) {
-              const data = localStorage.getItem(key);
-              if (data) {
-                try {
-                  const parsed = JSON.parse(data);
-                  const userData = parsed.user || parsed;
-                  
-                  if (userData && userData.email) {
-                    // Get actual task count from tasks storage
-                    const userId = userData.id || userData.email;
-                    const tasksKey = 'opt_tasks_' + userId;
-                    const tasksData = localStorage.getItem(tasksKey);
-                    let actualTasksCompleted = userData.tasks_completed || 0;
-                    
-                    if (tasksData) {
-                      try {
-                        const tasks = JSON.parse(tasksData);
-                        actualTasksCompleted = tasks.filter((t: any) => t.status === 'completed').length;
-                      } catch (e) {
-                        // Use stored value if parsing fails
-                      }
-                    }
-                    
-                    loadedUsers.push({
-                      id: userData.id || userData.email,
-                      email: userData.email,
-                      account_type: userData.account_type || 'personal',
-                      vip_level: userData.vip_level || 1,
-                      tasks_completed: actualTasksCompleted,
-                      training_progress: actualTasksCompleted,
-                      training_completed: userData.training_completed || false,
-                      total_earned: userData.total_earned || 0,
-                      balance: userData.balance || 0,
-                      status: userData.status || 'active',
-                      referral_code: userData.referral_code || '',
-                      created_at: userData.created_at,
-                      last_login: userData.last_login,
-                      assigned_to: userData.assigned_to,
-                      is_training_account: userData.is_training_account || false
-                    });
-                  }
-                }
-              }
-            }
-          }
-        }
+      // Fetch users from Supabase
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('[AdminUsers] Error loading users from Supabase:', error);
+        toast.error('Failed to load users from database');
+        setUsers([]);
+        setFilteredUsers([]);
+        return;
       }
+
+      if (!data || data.length === 0) {
+        console.log('[AdminUsers] No users found in database');
+        setUsers([]);
+        setFilteredUsers([]);
+        return;
+      }
+
+      // Map Supabase data to User interface
+      const mappedUsers: User[] = data.map((user: any) => ({
+        ...user,
+        account_type: user.account_type || 'personal',
+        vip_level: user.vip_level ?? 1,
+        tasks_completed: user.tasks_completed ?? 0,
+        training_progress: user.training_progress ?? 0,
+        training_phase: user.training_phase ?? 0,
+        training_completed: user.training_completed || false,
+        total_earned: user.total_earned ?? 0,
+        balance: user.balance ?? 0,
+        referral_code: user.referral_code || '',
+        status: user.user_status || user.status || 'active'
+      }));
+
+      setUsers(mappedUsers);
+      setFilteredUsers(mappedUsers);
+      console.log(`[AdminUsers] Loaded ${mappedUsers.length} users from Supabase`);
     } catch (error) {
       console.error('[AdminUsers] Error loading users:', error);
-      toast.error('Failed to load users from Supabase, using localStorage');
-      // Fall back to localStorage on error
-      const storedUsers = localStorage.getItem('registeredUsers');
-      if (storedUsers) {
-        const parsed = JSON.parse(storedUsers);
-        const realUsers = parsed.filter((u: any) => !u.is_training_account);
-        setUsers(realUsers);
-        setFilteredUsers(realUsers);
-      }
+      toast.error('Failed to load users');
+      setUsers([]);
+      setFilteredUsers([]);
     } finally {
       setIsLoading(false);
     }
@@ -159,7 +165,7 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
     if (searchTerm) {
       filtered = filtered.filter(user =>
         user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        user.referral_code.toLowerCase().includes(searchTerm.toLowerCase())
+        (user.referral_code || '').toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
 
@@ -173,8 +179,20 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
 
   const handleSuspendUser = async (userId: string, email: string) => {
     try {
-      // Mock suspend for now - replace with real supabase call later
-      console.log(`Would suspend user ${userId} (${email})`);
+      const { error } = await supabase
+        .from('users')
+        .update({
+          user_status: 'suspended',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      if (error) {
+        console.error('Error suspending user:', error);
+        toast.error('Failed to suspend user in database');
+        return;
+      }
+
       toast.success(`${email} has been suspended`);
       loadUsers();
     } catch (error) {
@@ -185,8 +203,20 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
 
   const handleBanUser = async (userId: string, email: string) => {
     try {
-      // Mock ban for now - replace with real supabase call later
-      console.log(`Would ban user ${userId} (${email})`);
+      const { error } = await supabase
+        .from('users')
+        .update({
+          user_status: 'banned',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      if (error) {
+        console.error('Error banning user:', error);
+        toast.error('Failed to ban user in database');
+        return;
+      }
+
       toast.success(`${email} has been banned`);
       loadUsers();
     } catch (error) {
@@ -197,8 +227,20 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
 
   const handleActivateUser = async (userId: string, email: string) => {
     try {
-      // Mock activate for now - replace with real supabase call later
-      console.log(`Would activate user ${userId} (${email})`);
+      const { error } = await supabase
+        .from('users')
+        .update({
+          user_status: 'active',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      if (error) {
+        console.error('Error activating user:', error);
+        toast.error('Failed to activate user in database');
+        return;
+      }
+
       toast.success(`${email} has been activated`);
       loadUsers();
     } catch (error) {
@@ -209,19 +251,22 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
 
   const handleDeleteUser = async (userId: string, email: string) => {
     try {
-      // Delete from Supabase
+      // Soft delete: update status to 'deleted' in Supabase
       const { error } = await supabase
-        .from('profiles')
-        .delete()
+        .from('users')
+        .update({
+          user_status: 'deleted',
+          updated_at: new Date().toISOString()
+        })
         .eq('id', userId);
 
       if (error) {
         console.error('Error deleting user:', error);
-        toast.error('Failed to delete user');
+        toast.error('Failed to delete user in database');
         return;
       }
 
-      toast.success(`${email} has been deleted`);
+      toast.success(`${email} has been deleted (soft delete)`);
       setShowDeleteConfirm(false);
       setUserToDelete(null);
       loadUsers();
@@ -230,6 +275,84 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
       toast.error('Failed to delete user');
     }
   };
+  const handleUpdateBalance = async () => {
+    if (!selectedUser || !balanceAmount) {
+      toast.error('Please enter an amount');
+      return;
+    }
+
+    const amount = parseFloat(balanceAmount);
+    if (isNaN(amount) || amount <= 0) {
+      toast.error('Please enter a valid positive amount');
+      return;
+    }
+
+    try {
+      const newBalance = balanceAction === 'add'
+        ? (selectedUser.balance || 0) + amount
+        : (selectedUser.balance || 0) - amount;
+
+      if (newBalance < 0) {
+        toast.error('Insufficient balance for deduction');
+        return;
+      }
+
+      // Update balance in Supabase
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          balance: newBalance,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedUser.id);
+
+      if (error) {
+        console.error('Error updating balance:', error);
+        toast.error('Failed to update balance in database');
+        return;
+      }
+
+      toast.success(`Balance ${balanceAction === 'add' ? 'increased' : 'decreased'} by $${amount.toFixed(2)} for ${selectedUser.email}`);
+      setShowBalanceModal(false);
+      setBalanceAmount('');
+      setBalanceReason('');
+      loadUsers();
+    } catch (error) {
+      console.error('Error updating balance:', error);
+      toast.error('Failed to update balance');
+    }
+  };
+
+  const handleUpdateVip = async () => {
+    if (!selectedUser) {
+      return;
+    }
+
+    try {
+      // Update VIP level in Supabase
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          vip_level: vipLevel,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedUser.id);
+
+      if (error) {
+        console.error('Error updating VIP level:', error);
+        toast.error('Failed to update VIP level in database');
+        return;
+      }
+
+      toast.success(`VIP level updated to ${vipLevel} for ${selectedUser.email}`);
+      setShowVipModal(false);
+      loadUsers();
+    } catch (error) {
+      console.error('Error updating VIP level:', error);
+      toast.error('Failed to update VIP level');
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'active':
@@ -238,6 +361,8 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
         return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">Suspended</Badge>;
       case 'banned':
         return <Badge className="bg-red-500/20 text-red-400 border-red-500/30">Banned</Badge>;
+      case 'deleted':
+        return <Badge className="bg-gray-500/20 text-gray-400 border-gray-500/30">Deleted</Badge>;
       default:
         return <Badge className="bg-gray-500/20 text-gray-400 border-gray-500/30">Unknown</Badge>;
     }
@@ -389,21 +514,21 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                         <div>
                           <div className="font-medium text-white">{user.email}</div>
                           <div className="text-xs text-slate-400">
-                            Joined: {new Date(user.created_at).toLocaleDateString()}
+                            Joined: {user.created_at ? new Date(user.created_at).toLocaleDateString() : 'Unknown'}
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        {getAccountTypeBadge(user.account_type)}
+                        {getAccountTypeBadge(user.account_type || 'personal')}
                       </td>
                       <td className="px-6 py-4">
-                        {getVipLevelBadge(user.vip_level)}
+                        {getVipLevelBadge(user.vip_level ?? 1)}
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-white">
-                          {user.tasks_completed || 0}
+                          {user.tasks_completed ?? 0}
                           <span className="text-xs text-slate-400">
-                            /{user.account_type === 'personal' ? (user.vip_level === 1 ? 35 : 45) : 45}
+                            /{(user.account_type || 'personal') === 'personal' ? ((user.vip_level ?? 1) === 1 ? 35 : 45) : 45}
                           </span>
                         </div>
                       </td>
@@ -418,7 +543,7 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        {getStatusBadge(user.status)}
+                        {getStatusBadge(user.status || 'active')}
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center space-x-2">
@@ -430,28 +555,52 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                               setShowUserDetails(true);
                             }}
                             className="border-blue-600 text-blue-400 hover:bg-blue-600/10"
+                            title="View Details"
                           >
                             <Eye className="w-4 h-4" />
                           </Button>
-                          {user.status === 'active' ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleSuspendUser(user.id, user.email)}
-                              className="border-yellow-600 text-yellow-400 hover:bg-yellow-600/10"
-                            >
-                              <Ban className="w-4 h-4" />
-                            </Button>
-                          ) : (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleActivateUser(user.id, user.email)}
-                              className="border-green-600 text-green-400 hover:bg-green-600/10"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                            </Button>
-                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setSelectedUser(user);
+                              setBalanceAmount('');
+                              setBalanceReason('');
+                              setShowBalanceModal(true);
+                            }}
+                            className="border-green-600 text-green-400 hover:bg-green-600/10"
+                            title="Update Balance"
+                          >
+                            <DollarSign className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setSelectedUser(user);
+                              setVipLevel(user.vip_level ?? 1);
+                              setShowVipModal(true);
+                            }}
+                            className="border-yellow-600 text-yellow-400 hover:bg-yellow-600/10"
+                            title="Update VIP Level"
+                          >
+                            <Crown className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              if ((user.status || 'active') === 'active') {
+                                handleSuspendUser(user.id, user.email);
+                              } else {
+                                handleActivateUser(user.id, user.email);
+                              }
+                            }}
+                            className={(user.status || 'active') === 'active' ? 'border-orange-600 text-orange-400 hover:bg-orange-600/10' : 'border-green-600 text-green-400 hover:bg-green-600/10'}
+                            title={(user.status || 'active') === 'active' ? 'Suspend User' : 'Activate User'}
+                          >
+                            {(user.status || 'active') === 'active' ? <Ban className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                          </Button>
                           <Button
                             size="sm"
                             variant="outline"
@@ -460,6 +609,7 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                               setShowDeleteConfirm(true);
                             }}
                             className="border-red-600 text-red-400 hover:bg-red-600/10"
+                            title="Delete User"
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
@@ -498,24 +648,24 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-400">Account Type</label>
-                    <div>{getAccountTypeBadge(selectedUser.account_type)}</div>
+                    <div>{getAccountTypeBadge(selectedUser.account_type || 'personal')}</div>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-400">VIP Level</label>
-                    <div>{getVipLevelBadge(selectedUser.vip_level)}</div>
+                    <div>{getVipLevelBadge(selectedUser.vip_level ?? 1)}</div>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-400">Account Status</label>
-                    <div>{getStatusBadge(selectedUser.status)}</div>
+                    <div>{getStatusBadge(selectedUser.status || 'active')}</div>
                   </div>
                 </div>
                 <div className="space-y-4">
                   <div>
                     <label className="text-sm font-medium text-slate-400">Tasks Completed</label>
                     <div className="text-white text-lg">
-                      {selectedUser.tasks_completed || 0} / 
-                      {selectedUser.account_type === 'personal' 
-                        ? (selectedUser.vip_level === 1 ? 35 : 45) 
+                      {selectedUser.tasks_completed ?? 0} /
+                      {(selectedUser.account_type || 'personal') === 'personal'
+                        ? ((selectedUser.vip_level ?? 1) === 1 ? 35 : 45)
                         : 45}
                     </div>
                   </div>
@@ -538,13 +688,13 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                   <div>
                     <label className="text-sm font-medium text-slate-400">Member Since</label>
                     <div className="text-white">
-                      {new Date(selectedUser.created_at).toLocaleDateString()}
+                      {selectedUser.created_at ? new Date(selectedUser.created_at).toLocaleDateString() : 'Unknown'}
                     </div>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-400">Last Login</label>
                     <div className="text-white">
-                      {selectedUser.last_login 
+                      {selectedUser.last_login
                         ? new Date(selectedUser.last_login).toLocaleString()
                         : 'Never logged in'
                       }
@@ -556,6 +706,161 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
           </Card>
         </div>
       )}
+
+      {/* Balance Management Modal */}
+      {showBalanceModal && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-md bg-slate-800 border-slate-700">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="text-white">Update Balance</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowBalanceModal(false)}
+                className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              >
+                <XCircle className="w-4 h-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-400">User</label>
+                <div className="text-white font-mono">{selectedUser.email}</div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-400">Current Balance</label>
+                <div className="text-white text-lg font-medium">${(selectedUser.balance ?? 0).toFixed(2)}</div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-400">Action</label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant={balanceAction === 'add' ? 'default' : 'outline'}
+                    onClick={() => setBalanceAction('add')}
+                    className={balanceAction === 'add' ? 'bg-green-600 hover:bg-green-700' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}
+                  >
+                    <TrendingUp className="w-4 h-4 mr-2" />
+                    Add
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={balanceAction === 'deduct' ? 'default' : 'outline'}
+                    onClick={() => setBalanceAction('deduct')}
+                    className={balanceAction === 'deduct' ? 'bg-red-600 hover:bg-red-700' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}
+                  >
+                    <ArrowDownToLine className="w-4 h-4 mr-2" />
+                    Deduct
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-400">Amount ($)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={balanceAmount}
+                  onChange={(e) => setBalanceAmount(e.target.value)}
+                  placeholder="Enter amount"
+                  className="bg-slate-700 border-slate-600 text-white placeholder-slate-400"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-400">Reason (Optional)</label>
+                <Input
+                  type="text"
+                  value={balanceReason}
+                  onChange={(e) => setBalanceReason(e.target.value)}
+                  placeholder="Reason for balance change"
+                  className="bg-slate-700 border-slate-600 text-white placeholder-slate-400"
+                />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowBalanceModal(false);
+                    setBalanceAmount('');
+                    setBalanceReason('');
+                  }}
+                  className="flex-1 border-slate-600 text-slate-300 hover:bg-slate-700"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleUpdateBalance}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  <DollarSign className="w-4 h-4 mr-2" />
+                  Update Balance
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* VIP Management Modal */}
+      {showVipModal && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-md bg-slate-800 border-slate-700">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="text-white">Update VIP Level</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowVipModal(false)}
+                className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              >
+                <XCircle className="w-4 h-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-400">User</label>
+                <div className="text-white font-mono">{selectedUser.email}</div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-400">Current VIP Level</label>
+                <div>{getVipLevelBadge(selectedUser.vip_level ?? 1)}</div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-400">New VIP Level</label>
+                <select
+                  value={vipLevel}
+                  onChange={(e) => setVipLevel(parseInt(e.target.value))}
+                  className="w-full bg-slate-700 border-slate-600 text-white rounded px-3 py-2"
+                >
+                  <option value={0}>Free (Level 0)</option>
+                  <option value={1}>VIP 1 (Level 1)</option>
+                  <option value={2}>VIP 2 (Level 2)</option>
+                  <option value={3}>VIP 3 (Level 3)</option>
+                  <option value={4}>VIP 4 (Level 4)</option>
+                  <option value={5}>VIP 5 (Level 5)</option>
+                </select>
+              </div>
+              <div className="flex gap-3 pt-4">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowVipModal(false)}
+                  className="flex-1 border-slate-600 text-slate-300 hover:bg-slate-700"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleUpdateVip}
+                  className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white"
+                >
+                  <Crown className="w-4 h-4 mr-2" />
+                  Update VIP
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && userToDelete && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -568,10 +873,10 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-slate-300">
-                Are you sure you want to permanently delete <strong className="text-white">{userToDelete.email}</strong>?
+                Are you sure you want to delete <strong className="text-white">{userToDelete.email}</strong>?
               </p>
               <p className="text-slate-400 text-sm">
-                This action cannot be undone. All user data including tasks, earnings, and history will be permanently removed.
+                This will soft delete the user (change status to 'deleted'). The user's data will be preserved but they will not appear in the user list.
               </p>
               <div className="flex gap-3 pt-4">
                 <Button
@@ -589,7 +894,7 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                   className="flex-1 bg-red-500 hover:bg-red-600 text-white"
                 >
                   <Trash2 className="w-4 h-4 mr-2" />
-                  Delete Permanently
+                  Delete User
                 </Button>
               </div>
             </CardContent>

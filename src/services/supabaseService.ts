@@ -58,7 +58,7 @@ export interface DatabaseTask {
 export interface DatabaseTransaction {
   id: string;
   user_id: string;
-  type: 'deposit' | 'earning' | 'withdrawal' | 'task_reward' | 'combination_order' | 'profit_claim';
+  type: 'deposit' | 'earning' | 'withdrawal' | 'task_reward' | 'combination_33' | 'profit_claim';
   amount: number;
   description: string;
   status: 'pending' | 'completed' | 'failed';
@@ -71,7 +71,7 @@ export interface DatabaseTrainingAccount {
   user_id?: string;
   email: string;
   password: string;
-  assigned_to?: string;
+  assigned_to?: string; 
   created_by?: string;
   status: string;
   progress: number;
@@ -112,7 +112,7 @@ export class SupabaseService {
       vip_level: 1,
       balance: 0,
       total_earned: 0,
-      referral_code: Math.random().toString(36).substring(2, 8).toUpperCase(),
+      referral_code: `OPT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
       training_completed: false,
       training_progress: 0,
       training_phase: 1,
@@ -133,6 +133,9 @@ export class SupabaseService {
     phone?: string | null;
   }): Promise<DatabaseUser | null> {
     try {
+      console.log('[ensureUserProfile] Checking for existing profile:', params.id);
+      
+      // First attempt: Try to get existing user
       const { data: existingUser, error: existingError } = await supabase
         .from('users')
         .select('*')
@@ -140,18 +143,20 @@ export class SupabaseService {
         .maybeSingle();
 
       if (existingError) {
-        console.error('Error checking existing user profile:', existingError);
-        return null;
-      }
-
-      if (existingUser) {
+        console.error('[ensureUserProfile] Error checking existing user profile:', existingError);
+        // Don't return null yet, try to create the profile
+      } else if (existingUser) {
+        console.log('[ensureUserProfile] Found existing profile:', existingUser.id);
         return existingUser as DatabaseUser;
       }
 
       if (!params.email) {
+        console.error('[ensureUserProfile] Cannot create profile without email');
         return null;
       }
 
+      console.log('[ensureUserProfile] Creating new profile for:', params.id);
+      
       const profilePayload = this.buildDefaultProfile({
         id: params.id,
         email: params.email,
@@ -159,6 +164,7 @@ export class SupabaseService {
         phone: params.phone,
       });
 
+      // Try upsert (insert or update)
       const { data: createdUser, error: upsertError } = await supabase
         .from('users')
         .upsert(profilePayload, { onConflict: 'id' })
@@ -166,13 +172,29 @@ export class SupabaseService {
         .maybeSingle();
 
       if (upsertError) {
-        console.error('Error ensuring user profile:', upsertError);
-        return null;
+        console.error('[ensureUserProfile] Error creating user profile:', upsertError);
+        
+        // Try a second approach: direct insert if upsert failed
+        console.log('[ensureUserProfile] Retrying with direct insert...');
+        const { data: insertedUser, error: insertError } = await supabase
+          .from('users')
+          .insert(profilePayload)
+          .select()
+          .maybeSingle();
+        
+        if (insertError) {
+          console.error('[ensureUserProfile] Direct insert also failed:', insertError);
+          return null;
+        }
+        
+        console.log('[ensureUserProfile] Profile created via direct insert:', insertedUser?.id);
+        return (insertedUser as DatabaseUser) || null;
       }
 
+      console.log('[ensureUserProfile] Profile created via upsert:', createdUser?.id);
       return (createdUser as DatabaseUser) || null;
     } catch (error) {
-      console.error('Exception ensuring user profile:', error);
+      console.error('[ensureUserProfile] Exception ensuring user profile:', error);
       return null;
     }
   }
@@ -298,8 +320,34 @@ export class SupabaseService {
       });
 
       if (error) {
-        console.error('Signup error:', error.message);
-        return { user: null, error: error.message };
+        const signupMessage = error.message || '';
+        const alreadyRegistered = /already registered|already exists|user already/i.test(signupMessage);
+        if (alreadyRegistered) {
+          const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+            email: emailLower,
+            password,
+          });
+
+          if (signInError || !signInData.user) {
+            return { user: null, error: signInError?.message || 'User already registered. Please log in.' };
+          }
+
+          const recoveredUser = await this.ensureUserProfile({
+            id: signInData.user.id,
+            email: signInData.user.email || emailLower,
+            displayName: (signInData.user.user_metadata?.display_name as string | undefined) || displayName || null,
+            phone: (signInData.user.user_metadata?.phone as string | undefined) || phone || null,
+          });
+
+          if (!recoveredUser) {
+            return { user: null, error: 'User exists in auth, but profile recovery failed.' };
+          }
+
+          return { user: recoveredUser, error: null };
+        }
+
+        console.error('Signup error:', signupMessage);
+        return { user: null, error: signupMessage };
       }
 
       if (!data?.user) {
@@ -1067,20 +1115,50 @@ export class SupabaseService {
     }
   }
   
-  static async validateTrainingAccount(email: string, password: string): Promise<DatabaseTrainingAccount | null> {
+  static async validateTrainingAccount(email: string, password: string): Promise<DatabaseUser | null> {
     try {
-      const { data, error } = await supabase
-        .from('training_accounts')
-        .select('*')
-        .eq('email', email.toLowerCase())
-        .eq('password', password)
-        .single();
+      const emailKey = email.toLowerCase();
       
-      if (error || !data) {
+      // Training accounts use localStorage for auth only
+      const storedAccount = localStorage.getItem(`training_account_${emailKey}`);
+      
+      if (!storedAccount) {
+        console.log('[validateTrainingAccount] No training account found in localStorage for:', emailKey);
         return null;
       }
       
-      return data as DatabaseTrainingAccount;
+      const accountData = JSON.parse(storedAccount);
+      if (accountData.password !== password) {
+        console.log('[validateTrainingAccount] Password mismatch for:', emailKey);
+        return null;
+      }
+      
+      console.log('[validateTrainingAccount] Training account validated successfully:', emailKey);
+      
+      // Return a mock DatabaseUser object for training accounts
+      // Training accounts don't need to exist in Supabase database
+      return {
+        id: accountData.id || `training_${emailKey}`,
+        email: accountData.email || emailKey,
+        phone: accountData.phone || null,
+        display_name: accountData.assignedTo || accountData.display_name || emailKey.split('@')[0],
+        account_type: 'training',
+        vip_level: 2,
+        balance: 1100,
+        total_earned: 0,
+        referral_code: accountData.trainingReferralCode || '',
+        training_completed: false,
+        training_progress: 0,
+        user_status: 'active',
+        training_phase: 1,
+        tasks_completed: 0,
+        trigger_task_number: null,
+        has_pending_order: false,
+        pending_amount: 0,
+        is_negative_balance: false,
+        profit_added: false,
+        created_at: accountData.createdAt || new Date().toISOString()
+      } as DatabaseUser;
     } catch (error) {
       console.error('Exception validating training account:', error);
       return null;

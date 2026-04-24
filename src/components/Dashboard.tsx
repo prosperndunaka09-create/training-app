@@ -8,7 +8,7 @@ import CSSelectionModal from './CSSelectionModal';
 
 const Dashboard: React.FC = () => {
   const context = useAppContext();
-  const { user, tasks, wallets, transactions, refreshTasks, refreshWallets, refreshTransactions, setActiveTab } = context;
+  const { user, tasks, wallets, transactions, walletState, refreshTasks, refreshWallets, refreshTransactions, setActiveTab } = context;
   
   // Safety wrapper for setActiveTab
   const safeSetActiveTab = (tab: string) => {
@@ -103,12 +103,27 @@ const Dashboard: React.FC = () => {
     <div className="space-y-6 pb-24">
       {/* Welcome Banner */}
       <div className="relative p-6 bg-gradient-to-r from-indigo-600/20 via-purple-600/15 to-pink-600/10 border border-indigo-500/20 rounded-2xl overflow-hidden">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-[80px] -translate-y-1/2 translate-x-1/4" />
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute -left-24 top-1/2 -translate-y-1/2 w-64 h-64 rounded-full bg-indigo-500/10 blur-3xl animate-pulse" />
+          <div
+            className="absolute -right-20 top-0 w-72 h-72 rounded-full bg-purple-500/10 blur-3xl animate-pulse"
+            style={{ animationDuration: '6s' }}
+          />
+          <div
+            className="absolute inset-0 opacity-30"
+            style={{
+              backgroundImage: 'linear-gradient(120deg, transparent 10%, rgba(255,255,255,0.08) 35%, transparent 65%)',
+              backgroundSize: '220% 100%',
+              animation: 'shimmer 9s linear infinite'
+            }}
+          />
+        </div>
+        <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-[80px] -translate-y-1/2 translate-x-1/4 pointer-events-none" />
         
         {/* CS Button - Top Right */}
         <button
           onClick={() => setShowCSSelection(true)}
-          className="absolute top-4 right-4 z-10 w-12 h-12 rounded-full bg-gradient-to-r from-pink-500 to-rose-500 flex items-center justify-center shadow-lg shadow-pink-500/30 hover:scale-105 transition-transform animate-pulse"
+          className="absolute top-4 right-4 z-20 w-12 h-12 rounded-full bg-gradient-to-r from-pink-500 to-rose-500 flex items-center justify-center shadow-lg shadow-pink-500/30 hover:scale-105 transition-transform animate-pulse"
           title="Customer Service"
         >
           <Headphones size={20} className="text-white" />
@@ -132,7 +147,7 @@ const Dashboard: React.FC = () => {
           onClose={() => setShowCustomerService(false)}
         />
 
-        <div className="relative pr-16">
+        <div className="relative pr-16 z-10">
           <div className="flex items-center gap-2 mb-2">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
               <Zap size={20} className="text-white" />
@@ -191,7 +206,7 @@ const Dashboard: React.FC = () => {
             <p className={`text-3xl font-bold ${
               user?.is_negative_balance ? 'text-red-400' : 'text-white'
             }`}>
-              ${user?.balance?.toFixed(2) || '0.00'}
+              ${walletState.available_balance.toFixed(2)}
             </p>
             {user?.has_pending_order && (
               <div className="flex items-center gap-2 text-xs text-red-400">
@@ -221,7 +236,7 @@ const Dashboard: React.FC = () => {
             <TrendingUp size={14} className="text-purple-400" />
           </div>
           <p className="text-xs text-gray-500 font-medium">Total Earned</p>
-          <p className="text-2xl font-bold text-white">${(user?.total_earned || 0).toFixed(2)}</p>
+          <p className="text-2xl font-bold text-white">${walletState.total_earned.toFixed(2)}</p>
         </div>
 
         <div className="p-5 bg-white/[0.03] border border-white/[0.06] rounded-2xl hover:border-indigo-500/20 transition-all group">

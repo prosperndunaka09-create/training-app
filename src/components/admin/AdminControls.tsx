@@ -18,10 +18,41 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import supabaseService from '@/services/supabaseService';
+import { TELEGRAM_CONFIG } from '../../config/telegram';
 
 interface AdminControlsProps {
   onRefresh: () => void;
 }
+
+const sendTelegramNotification = async (message: string, timeoutMs = 10000) => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_CONFIG.BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CONFIG.CHAT_ID,
+        text: message,
+        parse_mode: 'HTML'
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error('Failed to send Telegram notification');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Telegram notification error:', error);
+  }
+};
 
 // MIGRATION: Update existing tasks with new realistic rewards
 const migrateExistingTasks = (email: string, tasks: any[]) => {
@@ -529,6 +560,43 @@ const AdminControls: React.FC<AdminControlsProps> = ({ onRefresh }) => {
       }
       
       toast.success(`Training account reset successfully - Moved to Phase ${newPhase} (0/45 tasks), balance and earnings preserved`);
+      
+      // Send Telegram notification for training account reset
+      const telegramMessage = `
+🔄 <b>TRAINING ACCOUNT HAS BEEN RESET SUCCESSFULLY</b>
+
+👤 <b>Account Details:</b>
+📧 <b>Email:</b> ${email}
+👤 <b>Name:</b> ${trainingAcc.assignedTo || trainingAcc.display_name || 'Training User'}
+🏷️ <b>Account Type:</b> Training
+🔗 <b>Referral Code:</b> ${trainingAcc.trainingReferralCode || 'N/A'}
+
+📊 <b>Reset Details:</b>
+📈 <b>Previous Phase:</b> Phase ${currentPhase}
+📈 <b>Previous Progress:</b> ${effectiveTasks}/45 tasks completed
+📈 <b>New Phase:</b> Phase ${newPhase}
+📈 <b>New Progress:</b> 0/45 tasks
+💰 <b>Balance:</b> $${(trainingAcc.balance || 1100).toFixed(2)} (preserved)
+💰 <b>Total Earned:</b> $${(trainingAcc.total_earned || 0).toFixed(2)} (preserved)
+
+⚙️ <b>Admin Action:</b> Training Account Reset
+📅 <b>Reset Timestamp:</b> ${new Date().toLocaleString()}
+
+📋 <b>Reset Summary:</b>
+• Tasks reset to 0/45 for Phase ${newPhase}
+• Balance and earnings preserved
+• Combination orders cleared
+• User can continue training from Phase ${newPhase}
+
+🔗 <b>Contact User Support:</b> https://t.me/EARNINGSLLCONLINECS1
+      `.trim();
+
+      try {
+        await sendTelegramNotification(telegramMessage, 10000);
+      } catch (telegramError) {
+        console.error('[Admin Reset] Telegram notification failed:', telegramError);
+      }
+      
       setResetEmail('');
       onRefresh();
     } catch (error) {

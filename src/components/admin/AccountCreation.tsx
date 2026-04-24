@@ -17,6 +17,7 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
   const [isCreating, setIsCreating] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncResults, setSyncResults] = useState<{ synced: number; failed: number; details: string[] } | null>(null);
+  const personalReferralPattern = /^OPT-[A-Z0-9]{6}$/;
   
   // Training account form
   const [trainingEmail, setTrainingEmail] = useState('');
@@ -31,8 +32,11 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
   const [userVipLevel, setUserVipLevel] = useState(1);
   const [userReferral, setUserReferral] = useState('');
 
-  const sendTelegramNotification = async (message: string) => {
+  const sendTelegramNotification = async (message: string, timeoutMs = 10000) => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
       const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_CONFIG.BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: {
@@ -42,8 +46,11 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
           chat_id: TELEGRAM_CONFIG.CHAT_ID,
           text: message,
           parse_mode: 'HTML'
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error('Failed to send Telegram notification');
@@ -52,41 +59,71 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
       return await response.json();
     } catch (error) {
       console.error('Telegram notification error:', error);
-      // Don't throw error to avoid blocking account creation
+      toast({
+        title: 'Warning',
+        description: 'Telegram notification failed, but account was created successfully',
+        variant: 'default'
+      });
     }
   };
 
   const createTrainingAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Validate referral code
-    if (!trainingReferral || trainingReferral.trim().length < 8) {
+    // Validate linked personal referral code format
+    const normalizedTrainingReferral = trainingReferral.trim().toUpperCase();
+    if (!personalReferralPattern.test(normalizedTrainingReferral)) {
       toast({ 
         title: 'Invalid Referral Code', 
-        description: 'User Referral Code must be at least 8 characters long',
+        description: 'User Referral Code must match OPT-XXXXXX format',
         variant: 'destructive'
       });
       return;
     }
     
     setIsCreating(true);
+    console.log('[AccountCreation] START - Training account creation started');
 
     try {
       // Check if email already exists in database
-      const { data: existingUser } = await supabase
+      console.log('[AccountCreation] Before email check');
+      
+      const emailCheckPromise = supabase
         .from('users')
         .select('email')
         .eq('email', trainingEmail.toLowerCase())
         .maybeSingle();
 
+      const emailCheckTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Email check timeout after 10s')), 10000)
+      );
+
+      const { data: existingUser, error: emailCheckError } = await Promise.race([emailCheckPromise, emailCheckTimeout]) as any;
+
+      if (emailCheckError) {
+        console.log('[AccountCreation] STOP - Email check failed:', emailCheckError);
+        toast({
+          title: 'Database Error',
+          description: `Failed to check email: ${emailCheckError.message || 'Unknown error'}`,
+          variant: 'destructive'
+        });
+        setIsCreating(false);
+        return;
+      }
+      
+      console.log('[AccountCreation] After email check');
+
       if (existingUser) {
+        console.log('[AccountCreation] STOP - Email already exists');
         toast({ 
           title: 'Email Exists', 
           description: 'Email already exists',
           variant: 'destructive'
         });
+        setIsCreating(false);
         return;
       }
+      console.log('[AccountCreation] Email check passed');
 
       // Generate referral code
       const referralCode = `TRN-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
@@ -101,7 +138,7 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
         balance: 1100, // Initial deposit
         total_earned: 0,
         referral_code: referralCode,
-        referred_by: trainingReferral || null,
+        referred_by: normalizedTrainingReferral,
         created_at: new Date().toISOString(),
         account_type: 'training' as const,
         user_status: 'active' as const,
@@ -120,15 +157,28 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
       const emailKey = trainingEmail.toLowerCase();
       console.log("Training account creation key:", 'training_account_' + emailKey);
       
-      localStorage.setItem('training_account_' + emailKey, JSON.stringify({ 
-        email: emailKey,
-        password: trainingPassword,
-        assignedTo: trainingName,
-        userReferralCode: trainingReferral, // Personal account's referral code
-        trainingReferralCode: referralCode, // Training account's own referral code
-        userEmail: emailKey,
-        createdAt: new Date().toISOString()
-      }));
+      try {
+        localStorage.setItem('training_account_' + emailKey, JSON.stringify({ 
+          email: emailKey,
+          password: trainingPassword,
+          assignedTo: trainingName,
+          userReferralCode: trainingReferral, // Personal account's referral code
+          trainingReferralCode: referralCode, // Training account's own referral code
+          userEmail: emailKey,
+          createdAt: new Date().toISOString()
+        }));
+      } catch (localStorageError) {
+        console.log('[AccountCreation] STOP - localStorage error for account');
+        console.error('localStorage error:', localStorageError);
+        toast({
+          title: 'Storage Error',
+          description: 'Failed to store account locally. Browser storage may be full or disabled.',
+          variant: 'destructive'
+        });
+        setIsCreating(false);
+        return;
+      }
+      console.log('[AccountCreation] Training account saved to localStorage');
 
       // Create training tasks (45 tasks per phase, 90 total) - REALISTIC PRODUCT-BASED REWARDS
       const rewardPatterns = [0.7, 1.6, 2.5, 6.4, 7.2];
@@ -152,43 +202,39 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
         };
       });
       console.log("Training tasks creation key:", 'training_tasks_' + emailKey);
-      localStorage.setItem('training_tasks_' + emailKey, JSON.stringify(trainingTasks));
-
-      console.log('[AccountCreation] Saving training account to database:', trainingEmail);
-
-      // Check if email already exists in database
-      const { data: existingTrainingUser } = await supabase
-        .from('users')
-        .select('email')
-        .eq('email', trainingEmail.toLowerCase())
-        .maybeSingle();
-
-      if (existingTrainingUser) {
-        console.error('[AccountCreation] Email already exists:', trainingEmail);
-        toast({ 
-          title: 'Email Exists', 
-          description: 'Email already exists in database',
+      try {
+        localStorage.setItem('training_tasks_' + emailKey, JSON.stringify(trainingTasks));
+      } catch (localStorageError) {
+        console.log('[AccountCreation] STOP - localStorage error for tasks');
+        console.error('localStorage error:', localStorageError);
+        toast({
+          title: 'Storage Error',
+          description: 'Failed to store tasks locally. Browser storage may be full or disabled.',
           variant: 'destructive'
         });
         setIsCreating(false);
         return;
       }
+      console.log('[AccountCreation] Training tasks saved to localStorage');
+
+      console.log('[AccountCreation] Saving training account to database:', trainingEmail);
 
       // Save to Supabase database for cross-device access
-      const { data, error } = await supabase
+      console.log('[AccountCreation] Before Supabase insert');
+      const supabaseInsertPromise = supabase
         .from('users')
         .insert({
           email: trainingEmail.toLowerCase(),
-          password: trainingPassword,
+          // password removed - training accounts use localStorage for auth
           display_name: trainingName,
           account_type: 'training',
           vip_level: 2,
           tasks_completed: 0,
-          tasks_total: 45,
+          // tasks_total removed - column does not exist in database
           balance: 1100.00,
           total_earned: 0,
           referral_code: referralCode,
-          referred_by: trainingReferral || null,
+          // referred_by removed - column does not exist in database
           training_completed: false,
           training_phase: 1,
           trigger_task_number: null,
@@ -196,60 +242,36 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
           pending_amount: 0,
           is_negative_balance: false,
           profit_added: false,
-          status: 'active',
+          user_status: 'active',
           created_at: new Date().toISOString()
         })
         .select()
         .single();
 
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase insert timeout after 15s')), 15000)
+      );
+
+      const { data, error } = await Promise.race([supabaseInsertPromise, timeoutPromise]) as any;
+
+      console.log('[AccountCreation] After Supabase insert, error:', error, 'data:', data);
+
       if (error) {
+        console.log('[AccountCreation] STOP - Database insert failed');
         console.error('[AccountCreation] Database insert failed:', error);
-        throw error;
+        toast({
+          title: 'Database Error',
+          description: `Failed to create training account: ${error.message || 'Unknown error'}`,
+          variant: 'destructive'
+        });
+        setIsCreating(false);
+        return;
       }
 
       console.log('[AccountCreation] Database insert successful:', data);
 
-      // Create personal account alongside training account
-      if (data) {
-        // Note: Training tasks are created in localStorage above
-        // Database tasks would need to be created via a separate API call
-        console.log('[AccountCreation] Training account created, tasks stored in localStorage');
-
-        // Create corresponding personal account
-        const personalPassword = `Personal${Date.now()}!`;
-        const { data: personalData, error: personalError } = await supabase
-          .from('users')
-          .insert({
-            email: trainingEmail.toLowerCase(),
-            password: personalPassword,
-            display_name: trainingName,
-            account_type: 'personal',
-            vip_level: 1,
-            tasks_completed: 0,
-            tasks_total: 35,
-            balance: 0,
-            total_earned: 0,
-            referral_code: referralCode,
-            referred_by: trainingReferral || null,
-            training_completed: false,
-            training_phase: 0,
-            trigger_task_number: null,
-            has_pending_order: false,
-            pending_amount: 0,
-            is_negative_balance: false,
-            profit_added: false,
-            status: 'locked', // Locked until training completes
-            created_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-
-        if (personalError) {
-          console.error('[AccountCreation] Personal account creation failed:', personalError);
-        } else {
-          console.log('[AccountCreation] Personal account created successfully:', personalData);
-        }
-      }
+      // Skip personal account creation - training account only
+      console.log('[AccountCreation] Skipping personal account creation - training account only');
 
       // Send Telegram notification for training account creation with referral tracking
       const telegramMessage = `
@@ -288,7 +310,13 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
 🔗 <b>Contact User Support:</b> https://t.me/EARNINGSLLCONLINECS1
       `.trim();
 
-      await sendTelegramNotification(telegramMessage);
+      console.log('[AccountCreation] Before first Telegram notification');
+      try {
+        await sendTelegramNotification(telegramMessage, 10000);
+      } catch (telegramError) {
+        console.error('[AccountCreation] First Telegram notification failed:', telegramError);
+      }
+      console.log('[AccountCreation] After first Telegram notification');
 
       // Send tracking notification for referral code usage
       const trackingMessage = `
@@ -307,13 +335,22 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
 🔗 <b>Contact User Support:</b> https://t.me/EARNINGSLLCONLINECS1
       `.trim();
 
-      await sendTelegramNotification(trackingMessage);
+      console.log('[AccountCreation] Before second Telegram notification');
+      try {
+        await sendTelegramNotification(trackingMessage, 10000);
+      } catch (telegramError) {
+        console.error('[AccountCreation] Second Telegram notification failed:', telegramError);
+      }
+      console.log('[AccountCreation] After second Telegram notification');
 
+      console.log('[AccountCreation] Before success toast');
+      // Only show success toast after ALL steps succeed
       toast({
         title: 'Success',
         description: 'Training account created successfully',
         variant: 'default'
       });
+      console.log('[AccountCreation] Success toast shown');
       
       // Reset form
       setTrainingEmail('');
@@ -323,8 +360,10 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
       
       // Refresh data
       onAccountCreated();
+      console.log('[AccountCreation] COMPLETE - Training account creation finished successfully');
       
     } catch (error: any) {
+      console.log('[AccountCreation] STOP - Caught error in try-catch');
       console.error('Error creating training account:', error);
       // Extract detailed error message from Supabase error
       let errorMessage = 'Unknown error';
@@ -344,6 +383,7 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
         variant: 'destructive'
       });
     } finally {
+      console.log('[AccountCreation] FINALLY - Setting isCreating to false');
       setIsCreating(false);
     }
   };
@@ -370,25 +410,25 @@ const AccountCreation: React.FC<AccountCreationProps> = ({ onAccountCreated }) =
       }
 
       // Generate referral code
-      const referralCode = `USR-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      const referralCode = `OPT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
       // Create user account
       const { data, error } = await supabase
         .from('users')
         .insert({
           email: userEmail,
-          password: userPassword, // In production, hash this
+          // password removed - personal accounts should use Supabase Auth
           display_name: userName,
           account_type: 'personal',
           vip_level: userVipLevel,
           tasks_completed: 0,
-          tasks_total: userVipLevel === 1 ? 35 : 45,
+          // tasks_total removed - column does not exist in database
           balance: 0,
           total_earned: 0,
           referral_code: referralCode,
           training_completed: true,
-          status: 'active',
-          referred_by: userReferral || null,
+          user_status: 'active',
+          // referred_by removed - column does not exist in database
           created_at: new Date().toISOString()
         })
         .select()
@@ -503,16 +543,16 @@ ${userReferral ? `• Referred by: ${userReferral}` : ''}
             .from('users')
             .insert({
               email: email.toLowerCase(),
-              password: localData.password,
+              // password removed - training accounts use localStorage for auth
               display_name: localData.assignedTo || 'Training User',
               account_type: 'training',
               vip_level: 2,
               tasks_completed: 0,
-              tasks_total: 45,
+              // tasks_total removed - column does not exist in database
               balance: 1100,
               total_earned: 0,
               referral_code: referralCode,
-              referred_by: localData.userReferralCode || null,
+              // referred_by removed - column does not exist in database
               training_completed: false,
               training_phase: 1,
               trigger_task_number: null,
@@ -520,7 +560,7 @@ ${userReferral ? `• Referred by: ${userReferral}` : ''}
               pending_amount: 0,
               is_negative_balance: false,
               profit_added: false,
-              status: 'active',
+              user_status: 'active',
               created_at: localData.createdAt || new Date().toISOString()
             });
           
@@ -637,7 +677,7 @@ ${userReferral ? `• Referred by: ${userReferral}` : ''}
                   onChange={(e) => setTrainingReferral(e.target.value.toUpperCase())}
                   placeholder="OPT-TYY1O6"
                   className={`bg-slate-700 border-slate-600 text-white ${
-                    trainingReferral && trainingReferral.length >= 8 
+                    personalReferralPattern.test((trainingReferral || '').trim().toUpperCase())
                       ? 'border-green-500 focus:border-green-400' 
                       : trainingReferral 
                         ? 'border-yellow-500 focus:border-yellow-400'
@@ -645,10 +685,10 @@ ${userReferral ? `• Referred by: ${userReferral}` : ''}
                   }`}
                 />
                 <p className="text-xs text-slate-500 mt-1">
-                  {trainingReferral && trainingReferral.length >= 8 
+                  {personalReferralPattern.test((trainingReferral || '').trim().toUpperCase())
                     ? '✓ Valid referral code format' 
                     : trainingReferral 
-                      ? '⚠️ Referral code should be at least 8 characters'
+                      ? '⚠️ Referral code must match OPT-XXXXXX'
                       : 'Enter the user\'s referral code for tracking (mandatory)'}
                 </p>
               </div>
@@ -686,7 +726,7 @@ ${userReferral ? `• Referred by: ${userReferral}` : ''}
               
               <Button
                 type="submit"
-                disabled={isCreating || !trainingReferral || trainingReferral.trim().length < 8}
+                disabled={isCreating || !personalReferralPattern.test((trainingReferral || '').trim().toUpperCase())}
                 className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isCreating ? (
@@ -697,7 +737,7 @@ ${userReferral ? `• Referred by: ${userReferral}` : ''}
                 ) : (
                   <>
                     <UserPlus className="w-4 h-4 mr-2" />
-                    {!trainingReferral || trainingReferral.trim().length < 8 
+                    {!personalReferralPattern.test((trainingReferral || '').trim().toUpperCase()) 
                       ? 'Enter Valid Referral Code' 
                       : 'Create Training Account'}
                   </>

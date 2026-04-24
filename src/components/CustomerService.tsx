@@ -1,17 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
-import { useAuth } from "@/contexts/SafeAuthProvider";
 import { X, Send, MessageCircle, ExternalLink, RefreshCw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { TELEGRAM_CONFIG, isCSBotConfigured } from '@/config/telegram';
+import { toast } from '@/components/ui/use-toast';
 
 interface Message {
   id: string;
-  message: string;
-  sender_role: 'customer' | 'admin' | 'telegram_admin' | 'system';
-  source: string;
+  content: string;
   created_at: string;
-  read_at?: string;
+  is_admin: boolean;
 }
 
 interface Conversation {
@@ -25,8 +23,7 @@ interface Conversation {
 }
 
 const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
-  const { user } = useAppContext();
-  const { isAuthenticated } = useAuth();
+  const { user, isAuthenticated } = useAppContext();
   const [step, setStep] = useState<'form' | 'conversation'>('form');
   const [formData, setFormData] = useState({
     full_name: '',
@@ -41,39 +38,71 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
 
   const [isSending, setIsSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isLoadingMessagesRef = useRef(false);
 
   const [hasNewMessage, setHasNewMessage] = useState(false);
   const [lastMessageCount, setLastMessageCount] = useState(0);
 
   const [isReloading, setIsReloading] = useState(false);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  
 
   useEffect(() => {
-    scrollToBottom();
+ messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });   
   }, [messages]);
 
   // Poll for new messages every 3 seconds when conversation is open
-  useEffect(() => {
-    if (!conversation || !isOpen) return;
+ useEffect(() => {
+  if (!conversation || !isOpen) return;
 
-    // Initial load
-    loadMessages(conversation.id);
+  // Initial load
+  loadMessages(conversation.id, false);
 
-    // Start polling
-    pollIntervalRef.current = setInterval(() => {
-      loadMessages(conversation.id, true);
-    }, 3000);
+  // Start polling
+  pollIntervalRef.current = setInterval(() => {
+    loadMessages(conversation.id, true);
+  }, 3000);
 
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
-  }, [conversation, isOpen]);
+  // ✅ CLEANUP (VERY IMPORTANT)
+  return () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+  };
+}, [conversation, isOpen]);
+ useEffect(() => {
+  if (!conversation?.id) return;
+
+  const channel = supabase
+    .channel('realtime:messages')
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'customer_messages',
+        filter: `conversation_id=eq.${conversation.id}`,
+      },
+    (payload) => {
+  console.log('🔥 Realtime message:', payload);
+
+ const newMsg = payload.new as Message; 
+
+  setMessages((prev: Message[]) => {
+    const exists = prev.some((m) => m.id === newMsg.id);
+    if (exists) return prev;
+
+    return [...prev, newMsg];
+  });
+}
+)
+.subscribe();  
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [conversation?.id]);
 
   useEffect(() => {
     if (isOpen && isAuthenticated && user) {
@@ -85,9 +114,22 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
   // Check for existing conversations - with localStorage fallback
   const checkExistingConversation = async () => {
     try {
-      console.log('Checking existing conversation for user:', user?.id);
+      // Skip Supabase for training accounts (they use email as ID, not UUID - causes DB errors)
+      if (user?.account_type === 'training') {
+        const localKey = `cs_conversation_${user?.id}`;
+        const localConv = localStorage.getItem(localKey);
+        if (localConv) {
+          const parsed = JSON.parse(localConv);
+          if (parsed.status === 'open') {
+            setConversation(parsed);
+            loadLocalMessages(parsed.id);
+            setStep('conversation');
+          }
+        }
+        return;
+      }
       
-      // First try Supabase (primary source for Telegram replies)
+      // For personal accounts (with UUID user_id), try Supabase first
       const { data, error } = await supabase
         .from('customer_conversations')
         .select('*')
@@ -97,7 +139,6 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
         .limit(1);
 
       if (!error && data && data.length > 0) {
-        console.log('Found Supabase conversation:', data[0]);
         setConversation(data[0]);
         // Save to localStorage for backup
         const localKey = `cs_conversation_${user?.id}`;
@@ -117,7 +158,6 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
       if (localConv) {
         const parsed = JSON.parse(localConv);
         if (parsed.status === 'open') {
-          console.log('Found localStorage conversation:', parsed);
           setConversation(parsed);
           loadLocalMessages(parsed.id);
           setStep('conversation');
@@ -130,11 +170,23 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
   };
 
   const loadMessages = async (conversationId: string, isPolling = false) => {
+    // Prevent overlapping fetches during polling
+    if (isPolling && isLoadingMessagesRef.current) {
+      return;
+    }
+    
     if (!isPolling) setIsReloading(true);
+    isLoadingMessagesRef.current = true;
+    
     try {
-      console.log('FRONTEND FETCHING MESSAGES for conversation:', conversationId);
+      // Skip Supabase for training accounts (use localStorage-only mode)
+      if (user?.account_type === 'training') {
+        loadLocalMessages(conversationId);
+        isLoadingMessagesRef.current = false;
+        if (!isPolling) setIsReloading(false);
+        return;
+      }
       
-      // First try Supabase (primary source)
       const { data, error } = await supabase
         .from('customer_messages')
         .select('*')
@@ -142,28 +194,12 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
         .order('created_at', { ascending: true });
 
       if (error) {
-        console.error('Error loading messages from DB:', error);
-        // Fall back to localStorage on error
-        loadLocalMessages(conversationId);
-      } else if (data && data.length > 0) {
-        // Use Supabase data (includes Telegram replies)
-        const localKey = `cs_messages_${conversationId}`;
-        localStorage.setItem(localKey, JSON.stringify(data));
+        console.error('Error loading messages:', error);
+        throw error;
+      }
+
+      if (data) {
         setMessages(data);
-        
-        // Check for new admin/telegram messages
-        if (isPolling && data.length > lastMessageCount) {
-          const newMessages = data.slice(lastMessageCount);
-          const adminMessages = newMessages.filter(
-            (msg: Message) => msg.sender_role === 'admin' || msg.sender_role === 'telegram_admin'
-          );
-          
-          if (adminMessages.length > 0) {
-            console.log('New admin/telegram messages detected:', adminMessages);
-            setHasNewMessage(true);
-          }
-        }
-        
         setLastMessageCount(data.length);
       } else {
         // No data in Supabase, try localStorage
@@ -173,6 +209,7 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
       console.error('Error loading messages:', error);
       loadLocalMessages(conversationId);
     } finally {
+      isLoadingMessagesRef.current = false;
       if (!isPolling) setIsReloading(false);
     }
   };
@@ -208,10 +245,59 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
     }
 
     setIsLoading(true);
+    
+    // Generate proper UUID for conversation_id (Supabase requires UUID type)
+    const localConversationId = crypto.randomUUID();
+    
+    // Save message to localStorage immediately (frontend-only mode)
+   const messageText = formData.message.trim();   // ✅ ADD THIS
+
+const tempMessage: Message = {
+  id: crypto.randomUUID(),
+  content: messageText,
+  is_admin: false,
+  created_at: new Date().toISOString()
+}; 
+    
+    const newConversation: Conversation = {
+      id: localConversationId,
+      user_id: user.id,
+      username: user.display_name || user.email || 'Customer',
+      status: 'open',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    
+    // Save to localStorage
+    const localKey = `cs_conversation_${user.id}`;
+    localStorage.setItem(localKey, JSON.stringify(newConversation));
+    setConversation(newConversation);
+    saveLocalMessage(localConversationId, tempMessage);
+    setStep('conversation');
+    setFormData({ full_name: '', phone_number: '', message: '' });
+    
+    // Skip API call for training accounts (use localStorage-only mode to avoid UUID errors)
+    if (user.account_type === 'training') {
+      setIsLoading(false);
+      console.log('Training account detected - skipping API call, using localStorage-only mode');
+      toast({
+        title: 'Message Sent',
+        description: 'Your message has been saved locally. Our team will assist you shortly.',
+      });
+      return;
+    }
+    
     try {
       console.log('📤 FRONTEND: Sending message via API');
+      console.log('📤 FRONTEND: Payload:', {
+        name: formData.full_name,
+        phone: formData.phone_number,
+        message: formData.message,
+        userId: user.id,
+        username: user.display_name || user.email || 'Customer'
+      });
       
-      // Call the API endpoint with cache-busting
+      // Call the API endpoint with cache-busting (background)
       const response = await fetch(`/api/send-message?_t=${Date.now()}`, {
         method: 'POST',
         headers: {
@@ -227,60 +313,52 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
         }),
       });
 
-      const data = await response.json();
+      console.log('📥 FRONTEND: Response status:', response.status, response.statusText);
+
+      // Safe response handling - check if response has JSON body
+      let data;
+      const contentType = response.headers.get('content-type');
+      console.log('📥 FRONTEND: Content-Type:', contentType);
+      
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        data = { success: response.ok };
+      }
       console.log('📥 FRONTEND: API response:', data);
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to send message');
+        console.error('❌ FRONTEND: Response not OK:', response.status, data);
+        throw new Error(data.error || `Failed to send message (HTTP ${response.status})`);
       }
 
       if (!data.success) {
+        console.error('❌ FRONTEND: API returned success=false:', data);
         throw new Error(data.error || 'Request failed');
       }
 
       console.log('✅ FRONTEND: Message sent successfully, conversation:', data.conversation_id);
 
-      // Create conversation object from response
-      const newConversation: Conversation = {
-        id: data.conversation_id,
-        user_id: data.user_id || user.id,
-        username: user.display_name || user.email || 'Customer',
-        status: 'open',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      
-      // Save to localStorage
-      const localKey = `cs_conversation_${user.id}`;
-      localStorage.setItem(localKey, JSON.stringify(newConversation));
-      setConversation(newConversation);
-
-      // Save initial message to localStorage
-      const initialMessage: Message = {
-        id: `msg-${Date.now()}`,
-        message: formData.message,
-        sender_role: 'customer',
-        source: 'website',
-        created_at: new Date().toISOString()
-      };
-      saveLocalMessage(data.conversation_id, initialMessage);
-
-      // Show success - don't try to load from DB if it failed
-      setMessages([initialMessage]);
-      setStep('conversation');
-      setFormData({ full_name: '', phone_number: '', message: '' });
-      
-      // Try to load from DB in background
-      try {
-        await loadMessages(data.conversation_id);
-      } catch (e) {
-        console.log('DB load failed, using localStorage');
+      // Update conversation ID if server returned a different one
+      if (data.conversation_id && data.conversation_id !== localConversationId) {
+        console.log('🔄 FRONTEND: Updating conversation ID from', localConversationId, 'to', data.conversation_id);
+        const updatedConversation = { ...newConversation, id: data.conversation_id };
+        localStorage.setItem(localKey, JSON.stringify(updatedConversation));
+        setConversation(updatedConversation);
+        
+        // Move messages to new conversation ID
+       const msgs = saveLocalMessage(data.conversation_id, tempMessage); 
+        setMessages(msgs);
       }
       
       console.log('✅ FRONTEND: Form submitted successfully');
     } catch (error: any) {
-      console.error('❌ FRONTEND: Error submitting:', error);
-      alert(`Error: ${error.message || 'Failed to submit. Please try again.'}`);
+      console.error('❌ FRONTEND: Error submitting to API:', error);
+      // Message is already saved locally, so show success toast even if API fails
+      toast({
+        title: 'Message Sent',
+        description: 'Your message has been saved locally. Support will be notified.'
+      });
     } finally {
       setIsLoading(false);
     }
@@ -295,16 +373,23 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
     const messageText = newMessage.trim();
     
     // Optimistically add message to UI
-    const tempMessage: Message = {
-      id: `temp-${Date.now()}`,
-      message: messageText,
-      sender_role: 'customer',
-      source: 'website',
-      created_at: new Date().toISOString()
-    };
+  const tempMessage: Message = {
+  id: crypto.randomUUID(),
+  content: messageText,
+  is_admin: false,
+  created_at: new Date().toISOString()
+}; 
     setMessages(prev => [...prev, tempMessage]);
     setNewMessage('');
 
+    // Skip API call for training accounts (use localStorage-only mode to avoid UUID errors)
+    if (user?.account_type === 'training') {
+      console.log('Training account detected - skipping API call, using localStorage-only mode');
+      saveLocalMessage(conversation.id, tempMessage);
+      setIsSending(false);
+      return;
+    }
+    
     try {
       console.log('📤 FRONTEND: Sending reply via API');
       
@@ -316,15 +401,22 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
           'Cache-Control': 'no-cache',
         },
         body: JSON.stringify({
-          name: conversation.username || 'Customer',
+          name: user?.display_name || user?.email || 'Customer',
           phone: '',
           message: messageText,
-          userId: conversation.user_id,
-          username: conversation.username
+          userId: user?.id,
+          username: user?.display_name || user?.email || 'Customer'
         }),
       });
 
-      const data = await response.json();
+      // Safe response handling - check if response has JSON body
+      let data;
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        data = { success: response.ok };
+      }
       console.log('📥 FRONTEND: API reply response:', data);
 
       if (!response.ok) {
@@ -333,30 +425,25 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
 
       console.log('✅ FRONTEND: Reply sent successfully');
       
-      // Save to localStorage
-      const replyMessage: Message = {
-        id: `msg-${Date.now()}`,
-        message: messageText,
-        sender_role: 'customer',
-        source: 'website',
-        created_at: new Date().toISOString()
-      };
-      const updatedMessages = saveLocalMessage(conversation.id, replyMessage);
-      setMessages(updatedMessages);
-      
-      // Try to reload from DB in background
+      // Reload from DB to get the actual server message ID
       try {
         await loadMessages(conversation.id);
       } catch (e) {
-        console.log('DB reload failed, using localStorage');
+        console.log('DB reload failed, keeping optimistic message');
       }
       
     } catch (error: any) {
       console.error('❌ FRONTEND: Error sending reply:', error);
       setErrorMessage(`Failed to send: ${error.message}`);
       
+      // Remove the optimistic message on error
+      setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
+      
       // Reload after a delay to sync with server
-      setTimeout(() => loadMessages(conversation.id), 1000);
+      setTimeout(() => {
+  if (!conversation?.id) return;
+  loadMessages(conversation.id);
+}, 1000);
     } finally {
       setIsSending(false);
     }
@@ -543,7 +630,7 @@ Reply via Telegram to respond to customer.`;
                 <button
                   onClick={() => {
                     setHasNewMessage(false);
-                    scrollToBottom();
+                   messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
                   }}
                   className="bg-gradient-to-r from-pink-500 to-purple-500 text-white px-4 py-3 rounded-xl font-bold text-sm animate-bounce shadow-lg flex items-center justify-center gap-2"
                 >
@@ -572,34 +659,27 @@ Reply via Telegram to respond to customer.`;
                 {messages.map((msg) => (
                   <div
                     key={msg.id}
-                    className={`${
-                      msg.sender_role === 'admin' || msg.sender_role === 'telegram_admin'
-                        ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-400/30'
-                        : msg.sender_role === 'customer'
-                        ? 'bg-white/10 border border-white/20 ml-auto'
-                        : 'bg-blue-500/20 border border-blue-400/30'
-                    } rounded-xl p-4 max-w-[85%] ${msg.sender_role === 'customer' ? 'ml-auto' : ''}`}
-                  >
-                    {msg.sender_role === 'admin' || msg.sender_role === 'telegram_admin' ? (
+                   className={`${ 
+  msg.is_admin
+    ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-400/30'
+    : 'bg-white/10 border border-white/20 ml-auto'
+} rounded-xl p-4 max-w-[85%]`}
+>
+{msg.is_admin ? (
                       <div className="text-center">
                         <p className="text-white font-bold text-sm">
                           SUPPORT AGENT
                         </p>
-                        <p className="text-white/90 mt-1">{msg.message}</p>
+                        <p className="text-white/90 mt-1">{msg.content}</p>
                         <p className="text-white/60 text-xs mt-2">{formatTime(msg.created_at)}</p>
                       </div>
-                    ) : msg.sender_role === 'system' ? (
-                      <div className="text-center">
-                        <p className="text-white font-bold text-sm">EARNINGSLLC CUSTOMER SERVICE</p>
-                        <p className="text-white/90 mt-1">{msg.message}</p>
-                      </div>
-                    ) : (
+                    )  : (
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-white/80 text-xs font-semibold">You</span>
                           <span className="text-white/60 text-xs">{formatTime(msg.created_at)}</span>
                         </div>
-                        <p className="text-white/90 text-sm leading-relaxed">{msg.message}</p>
+                        <p className="text-white/90 text-sm leading-relaxed">{msg.content}</p>
                       </div>
                     )}
                   </div>

@@ -34,31 +34,30 @@ const AuthModal: React.FC = () => {
       e.preventDefault();
       e.stopPropagation();
     }
-    console.log('handleSubmit called, authModalTab:', authModalTab);
     setSubmitError(null);
     
     const isValid = validate();
-    console.log('Validation result:', isValid, 'errors:', errors);
     if (!isValid) {
-      console.log('Validation failed');
       return;
     }
     
     if (authModalTab === 'login') {
-      console.log('Calling login...');
       const result = await login(email, password);
-      console.log('Login result:', result);
       if (!result.success) {
         setSubmitError(result.error || 'Login failed');
       } else {
         setAuthModalOpen(false);
       }
     } else {
-      console.log('Calling register with:', { email, displayName, phone });
       const result = await register(email, password, displayName, phone);
-      console.log('Register result:', result);
       if (!result.success) {
-        setSubmitError(result.error || 'Registration failed');
+        const errorMessage = result.error || 'Registration failed';
+        if (/already registered|already exists|user already/i.test(errorMessage)) {
+          setAuthModalTab('login');
+          setSubmitError('Account already exists. Please log in with this email.');
+          return;
+        }
+        setSubmitError(errorMessage);
       } else {
         setAuthModalOpen(false);
       }
@@ -70,7 +69,6 @@ const AuthModal: React.FC = () => {
   };
 
   const switchTab = (tab: 'login' | 'register') => {
-    console.log('Switching to tab:', tab);
     setAuthModalTab(tab);
     resetForm();
   };

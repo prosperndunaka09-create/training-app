@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
-import { CheckCircle, Lock, Zap, Loader2, DollarSign, Award, Star, ShoppingBag, Send, Package, Headphones, AlertTriangle, MessageCircle, ArrowRight, Plus, Sparkles, Crown } from 'lucide-react';
+import { CheckCircle, Lock, Zap, Loader2, DollarSign, Award, Star, ShoppingBag, Send, Package, Headphones, AlertTriangle, MessageCircle, ArrowRight, Plus, Sparkles, Crown, GraduationCap } from 'lucide-react';
 import DailyBonus from './DailyBonus';
 import { toast } from '@/components/ui/use-toast';
 import ProductCatalogService, { Product } from '@/services/productCatalogService';
+import SupabaseService from '@/services/supabaseService';
 
 
 
@@ -257,6 +258,7 @@ const SuccessMessage: React.FC<{ reward: number; onNext: () => void }> = ({ rewa
 const ProgressTracker: React.FC<{ tasks: any[]; currentTask: number; productCatalog: any[] }> = ({ tasks: tasksProp, currentTask, productCatalog: catalogProp }) => {
   const tasks = tasksProp || [];
   const productCatalog = catalogProp || [];
+  const safeCatalog = Array.isArray(productCatalog) ? productCatalog : [];
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (scrollRef.current) {
@@ -289,9 +291,11 @@ const ProgressTracker: React.FC<{ tasks: any[]; currentTask: number; productCata
 };
 
 const TaskGrid: React.FC = () => {
-  const { user, tasks, refreshTasks, completeTask } = useAppContext();
+  const { user, tasks, refreshTasks, completeTask, isLoading } = useAppContext();
   const [showSuccess, setShowSuccess] = useState(false);
   const [completedReward, setCompletedReward] = useState(0);
+  const [completedCount, setCompletedCount] = useState(0);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingProduct, setIsLoadingProduct] = useState(true);
   const [pendingCompletionTask, setPendingCompletionTask] = useState<number | null>(null);
@@ -299,6 +303,8 @@ const TaskGrid: React.FC = () => {
   const [showCombinationModal, setShowCombinationModal] = useState(true);
   const [showClaimProfitModal, setShowClaimProfitModal] = useState(true);
   const [showSupportOptions, setShowSupportOptions] = useState(false);
+  const [showTrainingShowroomModal, setShowTrainingShowroomModal] = useState(false);
+  const [previewImageFailed, setPreviewImageFailed] = useState(false);
 
   // Load appropriate product catalog based on account type
   useEffect(() => {
@@ -306,15 +312,15 @@ const TaskGrid: React.FC = () => {
     const catalog = isTraining 
       ? ProductCatalogService.getTrainingProducts()
       : ProductCatalogService.getPersonalProducts();
-    console.log('Loading product catalog:', isTraining ? 'training' : 'personal', 'count:', catalog.length);
     setProductCatalog(catalog);
   }, [user?.account_type]);
 
   useEffect(() => { refreshTasks(); }, [refreshTasks]);
 
   const safeTasks = tasks || [];
-  const completedCount = safeTasks.filter(t => t.status === 'completed').length;
-  const pendingTask = safeTasks.find(t => t.status === 'pending');
+  const calculatedCompletedCount = safeTasks.filter(t => t.status === 'completed').length;
+  const pendingTask = safeTasks.find(t => t.status === 'pending') || safeTasks[0];
+  const isTasksLoading = isLoading || (safeTasks.length === 0 && !pendingTask);
   
   // Reset loading state when pending task changes
   useEffect(() => {
@@ -340,12 +346,17 @@ const TaskGrid: React.FC = () => {
   // Personal: 35 tasks per phase (70 total)
   const tasksPerPhase = isTraining ? 45 : 35;
   const currentPhase = user?.training_phase || 1;
-  const totalTasks = tasksPerPhase; // Tasks per phase
-  const totalTasksAllPhases = tasksPerPhase * 2; // Total for both phases
-  const progress = totalTasks > 0 ? (completedCount / totalTasks) * 100 : 0;
-  const allComplete = isTraining ? 
-    (currentPhase === 1 ? completedCount === 45 : completedCount === 45) : 
-    (currentPhase === 1 ? completedCount === 35 : completedCount === 35);
+
+completedCount
+const totalTasks = tasksPerPhase;
+
+const progress = totalTasks > 0
+  ? (completedCount / totalTasks) * 100
+  : 0;
+
+const allComplete = isTraining
+  ? completedCount === 45
+  : completedCount === 35;
   
   // NEW: Check if user has completed training (for non-training accounts)
   // ALL personal accounts must complete training before accessing tasks
@@ -367,10 +378,17 @@ const TaskGrid: React.FC = () => {
     
     setIsSubmitting(true);
     setPendingCompletionTask(pendingTask.task_number);
-    const success = await completeTask(pendingTask.task_number);
-    if (success) {
-      setCompletedReward(pendingTask.reward);
-      setShowSuccess(true);
+    const result = await completeTask(pendingTask.task_number);
+
+if (result.success) {
+  setCompletedReward(result.reward || pendingTask.reward);
+  setCompletedCount(prev => prev + 1);
+  setShowSuccess(true);
+      
+      // Auto-advance to next task after 2.5 seconds
+      setTimeout(() => {
+        handleNextProduct();
+      }, 2500);
     } else {
       setPendingCompletionTask(null);
     }
@@ -398,9 +416,15 @@ const TaskGrid: React.FC = () => {
       ? user.pending_product  // Show the pending order product
       : safeCatalog.length > 0 
         ? safeCatalog[(pendingTask.task_number - 1) % safeCatalog.length]  // Show regular product
-        : { name: 'Loading...', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }
+        : { id: 'loading', name: 'Loading...', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }
     : null;
   const taskList = safeTasks.length > 0 ? safeTasks : Array.from({ length: isTraining ? 45 : 35 }, (_, i) => ({ task_number: i + 1, status: i === 0 ? 'pending' : 'locked', reward: [0.7, 1.6, 2.5, 6.4, 7.2][i % 5] }));
+  const previewProduct = safeCatalog[2] || safeCatalog[0] || { id: 'preview', name: 'Preview', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' };
+  const previewImageSrc = previewProduct?.image || '';
+
+  useEffect(() => {
+    setPreviewImageFailed(false);
+  }, [previewImageSrc]);
 
   return (
     <div className="space-y-4 md:space-y-6">
@@ -509,16 +533,17 @@ const TaskGrid: React.FC = () => {
                 onClick={async () => {
                   setIsSubmitting(true);
                   try {
-                    const result = await supabaseService.addPendingProductProfit(user?.id || '');
-                    if (result.success) {
-                      toast({
-                        title: '6x Profit Added!',
-                        description: `$${result.profit.toFixed(2)} has been added to your balance.`,
-                        variant: 'default',
-                      });
-                      // Reload user data
-                      window.location.reload();
-                    } else {
+                    const result = await completeTask(pendingTask.task_number);
+
+if (result) {
+  toast({
+    title: '6x Profit Added!',
+    description: `$$${pendingTask.reward.toFixed(2)} has been added`,
+    variant: 'default',
+  });
+
+  window.location.reload();
+} else {
                       toast({
                         title: 'Already Claimed',
                         description: 'This profit has already been added to your account.',
@@ -620,6 +645,41 @@ const TaskGrid: React.FC = () => {
           </div>
         </div>
       )}
+
+      {showTrainingShowroomModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-[#0f1420] border border-indigo-500/20 rounded-2xl w-full max-w-md shadow-2xl shadow-indigo-500/10">
+            <div className="px-6 py-5 border-b border-white/[0.06] bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-indigo-500/10 rounded-t-2xl">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                  <GraduationCap className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Training Access Required</h3>
+                  <span className="text-xs text-indigo-300 font-medium">Showroom Preview Only</span>
+                </div>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-300 leading-relaxed">
+                You are viewing the task showroom. Complete training first to unlock live task submission and earning access.
+              </p>
+              <div className="p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
+                <p className="text-xs text-indigo-300 mb-1">Next Step</p>
+                <p className="text-sm text-gray-300">Please finish your training program, then return to start live earning tasks.</p>
+              </div>
+            </div>
+            <div className="p-6 pt-0">
+              <button
+                onClick={() => setShowTrainingShowroomModal(false)}
+                className="w-full py-3 bg-white/[0.05] hover:bg-white/[0.1] text-gray-300 hover:text-white rounded-xl font-medium transition-all"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
       <DailyBonus />
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
@@ -670,7 +730,7 @@ const TaskGrid: React.FC = () => {
                 You must complete the training program before you can start earning from product reviews.
               </p>
               {/* Show product preview without submit button */}
-              <div className="max-w-xs mx-auto mb-6 opacity-90 pointer-events-none select-none">
+              <div className="max-w-xs mx-auto mb-6 opacity-95 select-none">
                 <div className="relative bg-gradient-to-br from-white/[0.05] to-white/[0.02] border border-white/[0.08] rounded-2xl overflow-hidden p-4 text-center">
                   <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10">
                     <div className="bg-gradient-to-r from-amber-400 to-amber-600 px-3 py-1 rounded-full shadow-lg flex items-center gap-1">
@@ -678,13 +738,31 @@ const TaskGrid: React.FC = () => {
                       <span className="text-xs font-bold text-white">VIP1</span>
                     </div>
                   </div>
-                  <div className="relative flex items-center justify-center min-h-[140px] mb-3 mt-6">
-                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 rounded-xl blur-xl" />
-                    <img src={safeCatalog[2]?.image || 'https://via.placeholder.com/150'} alt="Preview" className="relative w-full max-w-[120px] h-auto rounded-xl shadow-xl" />
+                  <div className="relative flex items-center justify-center min-h-[150px] mb-3 mt-6 rounded-xl border border-white/[0.08] bg-gradient-to-br from-[#0a111f] via-[#131d2f] to-[#0c1424] overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 via-transparent to-purple-500/10" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-white/[0.06]" />
+                    <div className="absolute -inset-10 rounded-full bg-indigo-500/10 blur-2xl animate-pulse" />
+                    <div
+                      className="relative w-full max-w-[125px] h-[125px] animate-spin"
+                      style={{ animationDuration: '16s', animationTimingFunction: 'linear' }}
+                    >
+                      {!previewImageFailed && previewImageSrc ? (
+                        <img
+                          src={previewImageSrc}
+                          alt={previewProduct?.name || 'Preview'}
+                          className="w-full h-full object-contain drop-shadow-[0_12px_24px_rgba(0,0,0,0.55)]"
+                          onError={() => setPreviewImageFailed(true)}
+                        />
+                      ) : (
+                        <div className="w-full h-full rounded-2xl border border-white/[0.12] bg-gradient-to-br from-slate-800/90 to-slate-900/90 flex items-center justify-center">
+                          <Package className="w-10 h-10 text-indigo-300/80" />
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="space-y-1 mb-3">
-                    <h3 className="text-sm font-bold text-white">{safeCatalog[2]?.name || 'Product Preview'}</h3>
-                    <p className="text-xs text-gray-500">{safeCatalog[2]?.brand || 'Brand'} • {safeCatalog[2]?.category || 'Category'}</p>
+                    <h3 className="text-sm font-bold text-white">{previewProduct?.name || 'Product Preview'}</h3>
+                    <p className="text-xs text-gray-500">{previewProduct?.brand || 'Brand'} • {previewProduct?.category || 'Category'}</p>
                   </div>
                   <div className="mb-3 p-2 bg-emerald-500/5 border border-emerald-500/10 rounded-lg">
                     <p className="text-xs text-gray-500 mb-0.5">Commission Reward</p>
@@ -693,9 +771,13 @@ const TaskGrid: React.FC = () => {
                       <span className="text-base font-bold text-emerald-500/60">0.25</span>
                     </div>
                   </div>
-                  <div className="w-full py-2 font-bold rounded-lg bg-gray-600/30 text-gray-500 text-sm cursor-not-allowed">
-                    <span>Locked</span>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTrainingShowroomModal(true)}
+                    className="w-full py-2.5 font-extrabold rounded-lg text-sm tracking-wide bg-gradient-to-r from-indigo-600/70 via-purple-600/70 to-indigo-600/70 border border-indigo-400/25 text-white shadow-lg shadow-indigo-900/30 hover:from-indigo-500/80 hover:via-purple-500/80 hover:to-indigo-500/80 transition-all"
+                  >
+                    TASK SHOWROOM
+                  </button>
                 </div>
               </div>
               <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl max-w-xs mx-auto mb-4">
@@ -771,15 +853,21 @@ const TaskGrid: React.FC = () => {
             <ProductPreloader onComplete={handlePreloaderComplete} />
           ) : user?.has_pending_order && pendingTask?.task_number === user?.trigger_task_number && user?.pending_product ? (
             <CombinationProductCard 
-              product1={safeCatalog.length > 0 ? safeCatalog[(pendingTask.task_number - 1) % safeCatalog.length] : { name: 'Product 1', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }} 
-              product2={safeCatalog.length > 0 ? safeCatalog[(pendingTask.task_number) % safeCatalog.length] : { name: 'Product 2', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }}
+              product1={safeCatalog.length > 0 ? safeCatalog[(pendingTask.task_number - 1) % safeCatalog.length] : { id: 'p1', name: 'Product 1', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }} 
+              product2={safeCatalog.length > 0 ? safeCatalog[(pendingTask.task_number) % safeCatalog.length] : { id: 'p2', name: 'Product 2', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }}
               combinedPrice={user.pending_amount || 210}
               taskNumber={pendingTask.task_number}
               userBalance={user.balance || 0}
               onContactSupport={() => setShowSupportOptions(true)}
             />
           ) : currentProduct && pendingTask ? (
-            <SimpleProductCard product={currentProduct} reward={pendingTask.reward} taskNumber={pendingTask.task_number} totalTasks={totalTasks} onSubmit={handleSubmit} isSubmitting={isSubmitting} isTraining={isTraining} hasPendingOrder={user?.has_pending_order} />
+            <SimpleProductCard product={currentProduct as Product} reward={pendingTask.reward} taskNumber={pendingTask.task_number} totalTasks={totalTasks} onSubmit={handleSubmit} isSubmitting={isSubmitting} isTraining={isTraining} hasPendingOrder={user?.has_pending_order} />
+          ) : isTasksLoading ? (
+            <div className="text-center py-12">
+              <Loader2 size={40} className="text-indigo-500 mx-auto mb-4 animate-spin" />
+              <h3 className="text-xl font-bold text-white mb-2">Loading Tasks...</h3>
+              <p className="text-gray-400">Please wait while we fetch your tasks.</p>
+            </div>
           ) : (
             <div className="text-center py-12"><Lock size={40} className="text-gray-500 mx-auto mb-4" /><h3 className="text-xl font-bold text-white mb-2">No Active Tasks</h3><p className="text-gray-400">No pending tasks available at the moment.</p></div>
           )}
