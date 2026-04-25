@@ -101,7 +101,14 @@ const MainAdminPanel: React.FC = () => {
     console.log('[MainAdmin] ADMIN SESSION:', sessionData.session ? 'Authenticated' : 'No session');
     console.log('[MainAdmin] Session data:', sessionData);
 
+    // Allow access if no session (user needs to log in via admin password)
     if (!sessionData.session) {
+      return;
+    }
+
+    // If session exists, check if user is admin
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user && user.email !== 'admin@nelly2026.com') {
       window.location.href = '/';
       return;
     }

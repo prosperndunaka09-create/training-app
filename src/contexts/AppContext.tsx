@@ -144,7 +144,7 @@ export interface AppContextType {
   logout: () => Promise<void>;
   
   // Tasks
-  completeTask: (taskNumber: number) => Promise<{ success: boolean; reward?: number; error?: string }>;
+  completeTask: (taskNumber: number) => Promise<{ success: boolean; reward?: number }>;
   refreshTasks: () => Promise<void>;
   
   // User
@@ -611,22 +611,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAuthLoading(true);
     try {
       const { user: dbUser, error } = await SupabaseService.signUp(email, password, displayName, phone);
-      
+
       if (error || !dbUser) {
         setAuthLoading(false);
         return { success: false, error: error || 'Registration failed' };
       }
-      
-      setUser(mapDatabaseUserToUser(dbUser));
+
+      const mappedUser = mapDatabaseUserToUser(dbUser);
+      setUser(mappedUser);
       setIsAuthenticated(true);
       await loadUserData(dbUser.id);
+
+      // Save training account to localStorage
+      const emailKey = mappedUser.email.toLowerCase();
+      localStorage.setItem(`training_account_${emailKey}`, JSON.stringify(mappedUser));
+
       setAuthLoading(false);
-      
+
       toast({
         title: 'Welcome!',
         description: 'Account created successfully'
       });
-      
+
       return { success: true };
     } catch (error: any) {
       setAuthLoading(false);
@@ -698,123 +704,61 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ===========================================
   // TASK FUNCTIONS
   // ===========================================
-  
-  const completeTask = async (taskNumber: number): Promise<{ success: boolean; reward?: number; error?: string }> => {
+
+  const completeTask = async (taskNumber: number): Promise<{ success: boolean; reward?: number }> => {
     if (!user) {
-      return { success: false, error: 'Not authenticated' };
+      return { success: false };
     }
-    
-    let result: { success: boolean; reward?: number };
-    
+
+    let result: { success: boolean; reward?: number } | null = null;
+
     // For training accounts, handle completion locally (localStorage only)
     if (user.account_type === 'training') {
       const task = tasks.find(t => t.task_number === taskNumber);
       if (!task) {
-        return { success: false, error: 'Task not found' };
+        return { success: false };
       }
-      
-      // Use the actual task reward value from the task data
+
       const reward = task.reward || 0;
-      result = { success: true, reward };
-      
-      // Update task status locally
-      const updatedTasks = tasks.map(t => 
-        t.task_number === taskNumber 
-          ? { ...t, status: 'completed' as const, completed_at: new Date().toISOString() }
+
+      const updatedTasks = tasks.map(t =>
+        t.task_number === taskNumber
+          ? {
+              ...t,
+              status: 'completed' as const,
+              completed_at: new Date().toISOString()
+            }
           : t
       );
-      
-      // Persist updated tasks to localStorage
-      if (user.email) {
-        const emailKey = user.email.toLowerCase();
-        localStorage.setItem(`training_tasks_${emailKey}`, JSON.stringify(updatedTasks));
-      }
-      
+
       setTasks(updatedTasks);
-      
-      // Calculate new completed count from updated tasks
+
       const newCompletedCount = updatedTasks.filter(t => t.status === 'completed').length;
-      
-      // Update user object with new tasks_completed and training_progress
+
       const updatedUser = {
         ...user,
         tasks_completed: newCompletedCount,
         training_progress: newCompletedCount
       };
+
       setUser(updatedUser);
-      
-      // Update training account in localStorage with new progress
+
       if (user.email) {
         const emailKey = user.email.toLowerCase();
-        const trainingAccountKey = `training_account_${emailKey}`;
-        const trainingAccountData = localStorage.getItem(trainingAccountKey);
-        
-        if (trainingAccountData) {
-          const trainingAccount = JSON.parse(trainingAccountData);
-          const updatedTrainingAccount = {
-            ...trainingAccount,
-            tasks_completed: newCompletedCount,
-            training_progress: newCompletedCount
-          };
-          localStorage.setItem(trainingAccountKey, JSON.stringify(updatedTrainingAccount));
-        }
+        localStorage.setItem(`training_tasks_${emailKey}`, JSON.stringify(updatedTasks));
+        localStorage.setItem(`training_account_${emailKey}`, JSON.stringify(updatedUser));
       }
-      
-      // Add to task history
-      const historyEntry: TaskHistory = {
-        id: `${Date.now()}_${taskNumber}`,
-        task_number: taskNumber,
-        product_name: task.title,
-        reward: reward,
-        completed_at: new Date().toISOString()
-      };
-      
-      // Add task_reward transaction
-      const transaction: Transaction = {
-        id: `tx_${Date.now()}_${taskNumber}`,
-        user_id: user.id,
-        type: 'task_reward',
-        amount: reward,
-        status: 'completed',
-        description: `Task ${taskNumber} reward: ${task.title}`,
-        created_at: new Date().toISOString(),
-        reference_id: task.id,
-        reference_type: 'task'
-      };
-      
-      // Update wallet state
-      const updatedWallet = {
-        available_balance: walletState.available_balance + reward,
-        pending_balance: walletState.pending_balance,
-        total_earned: walletState.total_earned + reward,
-        total_withdrawn: walletState.total_withdrawn,
-        transactions: [transaction, ...walletState.transactions]
-      };
-      
-      // Persist to localStorage
-      if (user.email) {
-        const emailKey = user.email.toLowerCase();
-        
-        // Save task history
-        const localHistory = localStorage.getItem(`training_history_${emailKey}`);
-        const history = localHistory ? JSON.parse(localHistory) : [];
-        history.unshift(historyEntry);
-        localStorage.setItem(`training_history_${emailKey}`, JSON.stringify(history));
-        setTaskHistory(history);
-        
-        // Save wallet state
-        localStorage.setItem(`training_wallet_${emailKey}`, JSON.stringify(updatedWallet));
-        setWalletState(updatedWallet);
-      }
+
+      return { success: true, reward };
     } else {
       // For personal accounts, use Supabase
       result = await SupabaseService.completeTask(user.id, taskNumber);
-      
-      if (result.success && result.reward) {
+
+      if (result?.success && result?.reward) {
         // Refresh user data
         await refreshUser();
         await refreshTasks();
-        
+
         // Add to task history
         const task = tasks.find(t => t.task_number === taskNumber);
         if (task) {
@@ -825,7 +769,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             reward: result.reward,
             completed_at: new Date().toISOString()
           };
-          
+
           // Add task_reward transaction
           const transaction: Transaction = {
             id: `tx_${Date.now()}_${taskNumber}`,
@@ -838,7 +782,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             reference_id: task.id,
             reference_type: 'task'
           };
-          
+
           // Update wallet state
           const updatedWallet = {
             available_balance: walletState.available_balance + result.reward,
@@ -847,17 +791,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             total_withdrawn: walletState.total_withdrawn,
             transactions: [transaction, ...walletState.transactions]
           };
-          
+
           // For personal accounts, store in state
           setTaskHistory(prev => [historyEntry, ...prev]);
           setWalletState(updatedWallet);
         }
       }
     }
-    
+
     toast({
       title: 'Task Completed!',
-      description: `You earned $${result.reward.toFixed(2)}`
+      description: `You earned $${(result?.reward || 0).toFixed(2)}`
     });
     
     // Check if we should trigger pending order for personal accounts
@@ -907,8 +851,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           variant: 'destructive'
         });
       }
-    
-    return result;
+
+    return result || { success: false };
   };
 
   const refreshTasks = useCallback(async (): Promise<void> => {

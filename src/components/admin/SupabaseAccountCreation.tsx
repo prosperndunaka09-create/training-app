@@ -97,6 +97,34 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
         return;
       }
 
+      // Save training account to localStorage for login
+      const emailKey = trainingEmail.toLowerCase();
+      const accountData = {
+        email: emailKey,
+        password: trainingPassword,
+        assignedTo: trainingName,
+        userReferralCode: trainingReferral,
+        trainingReferralCode: referralCode,
+        userEmail: emailKey,
+        createdAt: new Date().toISOString()
+      };
+
+      console.log('[SupabaseAccountCreation] About to save training_account to localStorage');
+      console.log('[SupabaseAccountCreation] Key:', `training_account_${emailKey}`);
+      console.log('[SupabaseAccountCreation] Data to save:', accountData);
+      console.log('[SupabaseAccountCreation] Data has email:', !!accountData.email);
+      console.log('[SupabaseAccountCreation] Data has password:', !!accountData.password);
+
+      try {
+        localStorage.setItem(`training_account_${emailKey}`, JSON.stringify(accountData));
+        console.log('[SupabaseAccountCreation] localStorage.setItem called successfully');
+        const saved = localStorage.getItem(`training_account_${emailKey}`);
+        console.log('[SupabaseAccountCreation] Verification - saved data exists:', !!saved);
+        console.log('[SupabaseAccountCreation] Verification - saved data length:', saved?.length);
+      } catch (error) {
+        console.error('[SupabaseAccountCreation] Failed to save training_account to localStorage:', error);
+      }
+
       // Create training tasks
       const rewardPatterns = [0.7, 1.6, 2.5, 6.4, 7.2];
       const trainingTasks = Array.from({ length: 45 }, (_, i) => {
@@ -119,6 +147,9 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
       });
 
       await SupabaseService.createTasks(trainingTasks);
+
+      // Save training tasks to localStorage
+      localStorage.setItem(`training_tasks_${emailKey}`, JSON.stringify(trainingTasks));
 
       // Log admin action
       SecurityManager.logAction('CREATE_TRAINING_ACCOUNT', trainingEmail, {

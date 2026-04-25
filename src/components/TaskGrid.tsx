@@ -535,7 +535,7 @@ if (result.success) {
                   try {
                     const result = await completeTask(pendingTask.task_number);
 
-if (result) {
+if (result.success) {
   toast({
     title: '6x Profit Added!',
     description: `$$${pendingTask.reward.toFixed(2)} has been added`,
