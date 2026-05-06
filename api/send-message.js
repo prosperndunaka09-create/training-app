@@ -14,8 +14,8 @@ export default async function handler(req, res) {
   
   const supabaseUrl = env.VITE_SUPABASE_URL;
   const supabaseServiceKey = env.SUPABASE_SERVICE_ROLE_KEY;
-  const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN || '8513756424:AAGvKY6eJK6ANfqC2S-5z0LlXM-YDRGbmaA';
-  const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID || '7683177085';
+  const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
+  const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID;
   
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -130,22 +130,18 @@ export default async function handler(req, res) {
             console.log('📤 API: Telegram token length:', TELEGRAM_BOT_TOKEN ? TELEGRAM_BOT_TOKEN.length : 0);
             
             try {
-              const telegramResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  chat_id: TELEGRAM_CHAT_ID,
-                  text: `🆕 NEW CUSTOMER MESSAGE\n\n👤 Name: ${name}\n📞 Phone: ${phone || 'Not provided'}\n🆔 User ID: ${finalUserId}\n💬 Message:\n${message}\n\n📝 Conversation ID: ${conversationId}\n📊 Storage: Database`,
-                  parse_mode: 'HTML'
-                })
+              const telegramMessage = `🆕 NEW CUSTOMER MESSAGE\n\n👤 Name: ${name}\n📞 Phone: ${phone || 'Not provided'}\n🆔 User ID: ${finalUserId}\n💬 Message:\n${message}\n\n📝 Conversation ID: ${conversationId}\n📊 Storage: Database`;
+
+              // Call Supabase Edge Function instead of direct Telegram API
+              const supabase = createClient(supabaseUrl, supabaseServiceKey);
+              const { data, error } = await supabase.functions.invoke('telegram-bot', {
+                body: { message: telegramMessage }
               });
 
-              const telegramResult = await telegramResponse.json();
-              
-              if (telegramResult.ok) {
-                console.log('✅ API: Telegram notification sent successfully');
+              if (error) {
+                console.error('❌ API: Telegram notification via Edge Function failed:', error);
               } else {
-                console.error('❌ API: Telegram API error:', telegramResult);
+                console.log('✅ API: Telegram notification sent successfully via Edge Function');
               }
             } catch (telegramError) {
               console.error('❌ API: Error sending to Telegram:', telegramError);

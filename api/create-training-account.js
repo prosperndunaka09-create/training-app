@@ -198,48 +198,43 @@ export default async function handler(req, res) {
     // Send Telegram notification for new training account (don't block on failure)
     console.log('[Telegram] New account notification started');
     try {
-      const token = process.env.TELEGRAM_BOT_TOKEN;
-      const chatId = process.env.TELEGRAM_CHAT_ID;
-      
-      if (token && chatId) {
-        const url = `https://api.telegram.org/bot${token}/sendMessage`;
-        
-        const message = `🎉 <b>New Account Created</b>\n\n` +
-          `👤 <b>User Details:</b>\n` +
-          `🆔 ID: <code>${authUserId}</code>\n` +
-          `📧 Email: ${email.toLowerCase()}\n` +
-          `🏷️ Name: ${name}\n` +
-          `🏢 Account Type: TRAINING\n` +
-          `⭐ VIP Level: 2\n` +
-          `💰 Balance: $1100.00\n` +
-          `🔗 Referral Code: <code>${newReferralCode}</code>\n` +
-          `📊 Status: active\n` +
-          `🕐 Created: ${new Date().toLocaleString()}\n\n` +
-          `📚 <b>Training Account Details:</b>\n` +
-          `✅ Training Account: Yes\n` +
-          `💵 Training Balance: $1100.00\n` +
-          `📋 Current Task: 1 of 45\n` +
-          `🎯 Total Tasks: 45\n` +
-          `🔗 Linked to User: <code>${existingUser.id}</code>\n\n` +
-          `🌐 Domain: earnings.ink`;
-        
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: message,
-            parse_mode: 'HTML'
-          })
+      const message = `🎉 <b>New Account Created</b>\n\n` +
+        `👤 <b>User Details:</b>\n` +
+        `🆔 ID: <code>${authUserId}</code>\n` +
+        `📧 Email: ${email.toLowerCase()}\n` +
+        `🏷️ Name: ${name}\n` +
+        `🏢 Account Type: TRAINING\n` +
+        `⭐ VIP Level: 2\n` +
+        `💰 Balance: $1100.00\n` +
+        `🔗 Referral Code: <code>${newReferralCode}</code>\n` +
+        `📊 Status: active\n` +
+        `🕐 Created: ${new Date().toLocaleString()}\n\n` +
+        `📚 <b>Training Account Details:</b>\n` +
+        `✅ Training Account: Yes\n` +
+        `💵 Training Balance: $1100.00\n` +
+        `📋 Current Task: 1 of 45\n` +
+        `🎯 Total Tasks: 45\n` +
+        `🔗 Linked to User: <code>${existingUser.id}</code>\n\n` +
+        `🌐 Domain: earnings.ink`;
+
+      // Call Supabase Edge Function instead of direct Telegram API
+      const supabaseUrl = process.env.VITE_SUPABASE_URL;
+      const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+      if (supabaseUrl && supabaseServiceKey) {
+        const { createClient } = await import('@supabase/supabase-js');
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        const { data, error } = await supabase.functions.invoke('telegram-bot', {
+          body: { message }
         });
-        
-        if (response.ok) {
-          console.log('[Telegram] New account notification sent');
+
+        if (error) {
+          console.error('[Telegram] New account notification via Edge Function failed:', error);
         } else {
-          console.error('[Telegram] New account notification failed:', await response.text());
+          console.log('[Telegram] New account notification sent successfully via Edge Function');
         }
       } else {
-        console.warn('[Telegram] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID');
+        console.warn('[Telegram] Missing Supabase configuration for Edge Function');
       }
     } catch (telegramError) {
       console.error('[Telegram] New account notification failed:', telegramError);
