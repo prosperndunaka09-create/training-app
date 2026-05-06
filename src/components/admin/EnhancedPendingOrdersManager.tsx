@@ -68,10 +68,12 @@ const EnhancedPendingOrdersManager: React.FC = () => {
   // Load all users with tracking info
   const loadAllUsers = async () => {
     setIsLoading(true);
+    console.log('[PendingOrders] Loading users');
     try {
       const { data: { user: adminUser } } = await supabase.auth.getUser();
-      
+
       if (!adminUser) {
+        console.error('[PendingOrders] Admin authentication required');
         toast({ title: 'Error', description: 'Admin authentication required', variant: 'destructive' });
         return;
       }
@@ -81,26 +83,27 @@ const EnhancedPendingOrdersManager: React.FC = () => {
       });
 
       if (error) {
-        console.error('Error loading users:', error);
+        console.error('[PendingOrders] Error loading users:', error);
         toast({ title: 'Error', description: 'Failed to load users', variant: 'destructive' });
         return;
       }
 
       const users = data || [];
+      console.log(`[PendingOrders] Loaded users count: ${users.length}`);
       setAllUsers(users);
-      
+
       // Separate pending users
       const pending = users.filter((u: TrackedUser) => u.has_pending_order);
       setPendingUsers(pending);
-      
+
       applyFilters(users, searchTerm, filterDay, filterPhase);
-      
+
       toast({
         title: 'Loaded',
         description: `Found ${users.length} users, ${pending.length} with pending orders`,
       });
     } catch (error) {
-      console.error('Exception loading users:', error);
+      console.error('[PendingOrders] Exception loading users:', error);
       toast({ title: 'Error', description: 'Failed to load users', variant: 'destructive' });
     } finally {
       setIsLoading(false);

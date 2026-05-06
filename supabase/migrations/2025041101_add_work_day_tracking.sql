@@ -268,8 +268,8 @@ RETURNS TABLE (
 BEGIN
     -- Verify admin
     IF NOT EXISTS (
-        SELECT 1 FROM public.users 
-        WHERE id = p_admin_id AND account_type = 'admin'
+        SELECT 1 FROM public.users u
+        WHERE u.id = p_admin_id AND u.account_type = 'admin'
     ) THEN
         RAISE EXCEPTION 'Unauthorized: Admin access required';
     END IF;
