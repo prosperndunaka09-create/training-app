@@ -3,18 +3,32 @@ import { useAppContext } from '@/contexts/AppContext';
 import { ArrowDownToLine, AlertCircle, CheckCircle, Clock, XCircle, Loader2, DollarSign, Wallet, History, Lock, Wallet2, ArrowRight } from 'lucide-react';
 
 const WithdrawalSection: React.FC = () => {
-  const { user, tasks, wallets, refreshTasks, refreshWallets, isLoading, setActiveTab } = useAppContext();
+  const { user, tasks, wallets, refreshTasks, refreshWallets, isLoading, setActiveTab, requestWithdrawal, getWithdrawalHistory, hasPendingWithdrawal } = useAppContext();
   const [amount, setAmount] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [withdrawals, setWithdrawals] = useState<any[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [hasPending, setHasPending] = useState(false);
 
+  // Load data once on mount - use empty deps to avoid infinite loop from changing function refs
   useEffect(() => {
-    refreshTasks();
-    refreshWallets();
-  }, [refreshTasks, refreshWallets]);
+    const loadData = async () => {
+      await refreshTasks();
+      await refreshWallets();
+      // Load withdrawal history from Supabase
+      const history = await getWithdrawalHistory();
+      setWithdrawals(history);
+      // Check if user has pending withdrawal
+      const pending = await hasPendingWithdrawal();
+      setHasPending(pending);
+    };
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const safeTasks = tasks || [];
   const safeWallets = wallets || [];
-  const safeWithdrawals: any[] = []; // withdrawals not implemented in context
+  const safeWithdrawals = withdrawals;
   
   const completedCount = safeTasks.filter(t => t.status === 'completed').length;
   const isTraining = user?.account_type === 'training';
@@ -42,13 +56,30 @@ const WithdrawalSection: React.FC = () => {
 
     if (!primaryWallet) errs.wallet = 'Please bind a wallet first';
     if (!allTasksComplete) errs.tasks = `Complete all ${isTraining ? 45 : 35} tasks before withdrawing`;
+    if (hasPending) errs.amount = 'You already have a pending withdrawal request. Please wait for admin approval.';
 
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
-    // Withdrawal not implemented in current context
-    console.warn('Withdrawal not implemented');
-    setErrors({ amount: 'Withdrawal temporarily unavailable' });
+    setSubmitting(true);
+    
+    const result = await requestWithdrawal(
+      numAmount,
+      primaryWallet.wallet_address,
+      primaryWallet.wallet_type || 'TRC20'
+    );
+    
+    if (result.success) {
+      setAmount('');
+      // Refresh withdrawal history
+      const history = await getWithdrawalHistory();
+      setWithdrawals(history);
+      setHasPending(true);
+    } else {
+      setErrors({ amount: result.error || 'Failed to submit withdrawal request' });
+    }
+    
+    setSubmitting(false);
   };
 
   const getStatusBadge = (status: string) => {
@@ -223,11 +254,13 @@ const WithdrawalSection: React.FC = () => {
             </button>
             <button
               type="submit"
-              disabled={isLoading || !allTasksComplete || !primaryWallet}
+              disabled={submitting || isLoading || !allTasksComplete || !primaryWallet || hasPending}
               className="flex-1 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {isLoading ? (
+              {submitting || isLoading ? (
                 <><Loader2 size={16} className="animate-spin" /> Processing...</>
+              ) : hasPending ? (
+                <><Clock size={16} /> Pending Approval</>
               ) : (
                 <><ArrowDownToLine size={16} /> Request Withdrawal</>
               )}

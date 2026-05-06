@@ -34,6 +34,7 @@ const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
     balance: typeof user.balance === 'number' ? user.balance : 0,
     total_earned: typeof user.total_earned === 'number' ? user.total_earned : 0,
     training_progress: user.training_progress || 0,
+    task_number: user.task_number ?? 1,
     tasks_completed: user.tasks_completed || 0,
     created_at: user.created_at || new Date().toISOString(),
     id: user.id || ''
@@ -162,27 +163,27 @@ const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                 <div className="flex items-center gap-2">
                   <RefreshCw size={14} className="text-blue-400" />
                   <span className="text-sm text-gray-300">
-                    {safeUser.account_type === 'training' 
-                      ? `${safeUser.training_progress || 0} of 45 tasks` 
+                    {safeUser.account_type === 'training'
+                      ? `${safeUser.task_number ?? 1} of 45 tasks`
                       : `${safeUser.tasks_completed || 0} of 35 tasks`
                     }
                   </span>
                 </div>
                 <span className="text-sm text-blue-400 font-medium">
-                  {safeUser.account_type === 'training' 
-                    ? Math.round(((safeUser.training_progress || 0) / 45) * 100)
+                  {safeUser.account_type === 'training'
+                    ? Math.round(((safeUser.task_number ?? 1) / 45) * 100)
                     : Math.round(((safeUser.tasks_completed || 0) / 35) * 100)
                   }%
                 </span>
               </div>
               <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all"
-                  style={{ 
-                    width: `${safeUser.account_type === 'training' 
-                      ? Math.min(100, ((safeUser.training_progress || 0) / 45) * 100)
+                  style={{
+                    width: `${safeUser.account_type === 'training'
+                      ? Math.min(100, ((safeUser.task_number ?? 1) / 45) * 100)
                       : Math.min(100, ((safeUser.tasks_completed || 0) / 35) * 100)
-                    }%` 
+                    }%`
                   }}
                 />
               </div>

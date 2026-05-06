@@ -139,52 +139,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return true;
       }
 
-      // Check for training account
-      const trainingKey = `training_account_${email.toLowerCase()}`;
-      const trainingData = localStorage.getItem(trainingKey);
-      
-      if (trainingData) {
-        const trainingAcc = JSON.parse(trainingData);
-        
-        // Validate training account data
-        if (!SecurityManager.validateUserData({
-          ...trainingAcc,
-          balance: trainingAcc.balance || 1100,
-          total_earned: trainingAcc.total_earned || 0,
-        })) {
-          dispatch({ type: 'LOGIN_FAILURE', payload: 'Invalid training account data' });
-          return false;
-        }
-
-        if (trainingAcc.password === password) {
-          const trainingUser = {
-            id: 'training-' + email.toLowerCase(),
-            email: trainingAcc.email,
-            display_name: trainingAcc.assignedTo || 'Training User',
-            account_type: 'training',
-            balance: trainingAcc.balance || 1100,
-            total_earned: trainingAcc.total_earned || 0,
-            training_completed: trainingAcc.training_completed || false,
-            training_phase: trainingAcc.training_phase || 1,
-            tasks_completed: trainingAcc.tasks_completed || 0,
-            created_at: trainingAcc.createdAt || new Date().toISOString(),
-          };
-
-          // Create secure session
-          SecurityManager.createSession(trainingUser, false);
-          
-          // Store in localStorage
-          localStorage.setItem('opt_user', JSON.stringify(trainingUser));
-          
-          dispatch({ 
-            type: 'LOGIN_SUCCESS', 
-            payload: { user: trainingUser, isAdmin: false } 
-          });
-          
-          return true;
-        }
-      }
-
       // Check for personal account
       const personalKey = `opt_account_${email.toLowerCase()}`;
       const personalData = localStorage.getItem(personalKey);

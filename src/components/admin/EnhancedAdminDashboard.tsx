@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, ArrowDownToLine, RefreshCw, Shield, ChevronLeft,
   BarChart3, Activity, Zap, Lock, Eye, EyeOff, LogIn, TrendingUp,
   UserPlus, DollarSign, Clock, CheckCircle, AlertTriangle, Settings,
-  Bell, Database, FileText, CreditCard, UserCheck, Target, Award
+  Bell, Database, FileText, CreditCard, UserCheck, Target, Award, Mail
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -69,8 +69,6 @@ const EnhancedAdminDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'withdrawals' | 'accounts' | 'tasks' | 'pending_orders' | 'settings'>('overview');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -291,35 +289,29 @@ const EnhancedAdminDashboard: React.FC = () => {
     }
   }, []);
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Use different password to avoid conflicts
-    const cleanPassword = adminPassword.trim();
-    
-    if (cleanPassword === 'admin2025') {
-      setIsAuthenticated(true);
-      localStorage.setItem('admin_authenticated', 'true');
-      // Set default data immediately to prevent blank screen
-      setUsers([]);
-      setWithdrawals([]);
-      setStats({
-        totalUsers: 0, totalPayouts: 0, pendingPayouts: 0, totalBalance: 0,
-        completedTasks: 0, totalTasks: 0, activeToday: 0, pendingWithdrawals: 0, newUsersToday: 0,
-        totalEarnings: 0, averageTasksPerUser: 0, topPerformers: 0, flaggedAccounts: 0,
-      });
-      setIsLoading(false);
-    } else {
-      toast({
-        title: 'Authentication Failed',
-        description: 'Invalid admin password. Use "admin2025"',
-        variant: 'destructive',
-      });
-    }
-  };
-
   useEffect(() => {
-    const saved = localStorage.getItem('admin_authenticated');
-    if (saved === 'true') {
+    const checkAuth = async () => {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      
+      if (error || !session) {
+        setIsAuthenticated(false);
+        navigate('/');
+        return;
+      }
+
+      // Verify user is admin from database
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('account_type, user_status')
+        .eq('id', session.user.id)
+        .single();
+
+      if (userError || !userData || userData.account_type !== 'admin') {
+        setIsAuthenticated(false);
+        navigate('/');
+        return;
+      }
+
       setIsAuthenticated(true);
       // Set default data immediately
       setUsers([]);
@@ -330,8 +322,10 @@ const EnhancedAdminDashboard: React.FC = () => {
         totalEarnings: 0, averageTasksPerUser: 0, topPerformers: 0, flaggedAccounts: 0,
       });
       setIsLoading(false);
-    }
-  }, []);
+    };
+
+    checkAuth();
+  }, [navigate]);
 
   // Setup real-time listeners when authenticated
   useEffect(() => {
@@ -346,13 +340,10 @@ const EnhancedAdminDashboard: React.FC = () => {
     loadData(true);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setIsAuthenticated(false);
-    localStorage.removeItem('admin_authenticated');
-    toast({
-      title: 'Logged Out',
-      description: 'You have been logged out of admin panel',
-    });
+    navigate('/');
   };
 
   const handleFreezeUser = async (userId: string) => {
@@ -655,45 +646,16 @@ const EnhancedAdminDashboard: React.FC = () => {
            withdrawal.wallet_address.toLowerCase().includes(searchTerm.toLowerCase());
   });
 
+  // If not authenticated, redirect happens in useEffect
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md border-slate-700 shadow-2xl">
-          <CardHeader className="text-center">
-            <div className="mx-auto w-16 h-16 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full flex items-center justify-center mb-4">
-              <Shield className="w-8 h-8 text-white" />
-            </div>
-            <CardTitle className="text-2xl font-bold text-white">Admin Portal</CardTitle>
-            <p className="text-slate-400">Enter admin credentials to access dashboard</p>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Admin Password</label>
-                <div className="relative">
-                  <Input
-                    type={showPassword ? 'text' : 'password'}
-                    value={adminPassword}
-                    onChange={(e) => setAdminPassword(e.target.value)}
-                    placeholder="Enter admin password"
-                    className="bg-slate-800 border-slate-600 text-white placeholder-slate-400 pr-10"
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-300"
-                  >
-                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
-                </div>
-              </div>
-              <Button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700">
-                Access Admin Dashboard
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+        <div className="text-center">
+          <div className="w-16 h-16 rounded-full bg-gradient-to-r from-blue-600 to-purple-600 flex items-center justify-center mx-auto mb-4 animate-pulse">
+            <Shield className="w-8 h-8 text-white" />
+          </div>
+          <p className="text-slate-400">Verifying admin access...</p>
+        </div>
       </div>
     );
   }

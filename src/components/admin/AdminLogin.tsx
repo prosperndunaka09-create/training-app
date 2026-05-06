@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '@/lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Shield, Eye, EyeOff, AlertTriangle } from 'lucide-react';
+import { Shield, Eye, EyeOff, AlertTriangle, Mail } from 'lucide-react';
 
 const AdminLogin: React.FC = () => {
   const navigate = useNavigate();
@@ -14,70 +15,49 @@ const AdminLogin: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Admin credentials (hardcoded for this demo)
-  const ADMIN_CREDENTIALS = {
-    owner: {
-      email: 'owner@optimize.com',
-      password: 'OwnerAdmin2025!',
-      role: 'owner',
-      name: 'Platform Owner'
-    },
-    admin: {
-      email: 'admin@optimize.com',
-      password: 'Admin2025!',
-      role: 'admin',
-      name: 'System Administrator'
-    },
-    support: {
-      email: 'support@optimize.com',
-      password: 'Support2025!',
-      role: 'support',
-      name: 'Support Agent'
-    },
-    reviewer: {
-      email: 'reviewer@optimize.com',
-      password: 'Reviewer2025!',
-      role: 'reviewer',
-      name: 'Task Reviewer'
-    }
-  };
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      // Check credentials against hardcoded admin accounts
-      let foundAdmin = null;
-      
-      Object.values(ADMIN_CREDENTIALS).forEach(admin => {
-        if (admin.email === email.toLowerCase() && admin.password === password) {
-          foundAdmin = admin;
-        }
+      // Sign in with Supabase Auth
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email: email.toLowerCase(),
+        password: password,
       });
 
-      if (foundAdmin) {
-        // Store admin session
-        localStorage.setItem('admin_session', JSON.stringify({
-          email: foundAdmin.email,
-          role: foundAdmin.role,
-          name: foundAdmin.name,
-          loginTime: new Date().toISOString()
-        }));
-
-        // Log admin login
-        console.log('Admin login successful:', {
-          email: foundAdmin.email,
-          role: foundAdmin.role,
-          timestamp: new Date().toISOString()
-        });
-
-        // Redirect to dashboard
-        navigate('/admin/dashboard');
-      } else {
-        setError('Invalid email or password. Please check your credentials.');
+      if (authError) {
+        setError(authError.message || 'Invalid credentials');
+        return;
       }
+
+      if (!data.user) {
+        setError('Failed to authenticate user');
+        return;
+      }
+
+      // Verify user is admin from database
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('account_type, user_status')
+        .eq('id', data.user.id)
+        .single();
+
+      if (userError || !userData) {
+        await supabase.auth.signOut();
+        setError('User record not found');
+        return;
+      }
+
+      if (userData.account_type !== 'admin') {
+        await supabase.auth.signOut();
+        setError('You do not have admin privileges');
+        return;
+      }
+
+      // Redirect to admin panel
+      navigate('/admin');
     } catch (error) {
       console.error('Login error:', error);
       setError('Login failed. Please try again.');

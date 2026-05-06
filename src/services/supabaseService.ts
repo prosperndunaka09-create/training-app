@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { toast } from '@/components/ui/use-toast';
+import { TelegramService } from './telegramService';
 
 // ===========================================
 // DATABASE TYPES
@@ -58,7 +59,7 @@ export interface DatabaseTask {
 export interface DatabaseTransaction {
   id: string;
   user_id: string;
-  type: 'deposit' | 'earning' | 'withdrawal' | 'task_reward' | 'combination_33' | 'profit_claim';
+  type: 'deposit' | 'earning' | 'withdrawal' | 'task_reward' | 'combination_33' | 'profit_claim' | 'combination_order' | 'phase2_checkpoint_bonus' | 'phase2_checkpoint_approved' | 'training_completion_transfer_out' | 'training_completion_transfer_in';
   amount: number;
   description: string;
   status: 'pending' | 'completed' | 'failed';
@@ -66,9 +67,37 @@ export interface DatabaseTransaction {
   created_at: string;
 }
 
+// ===========================================
+// PHASE 2 CHECKPOINT TYPES
+// ===========================================
+
+export interface Phase2Checkpoint {
+  id: string;
+  user_id: string;
+  auth_user_id: string;
+  email: string;
+  phase: number;
+  task_number: number;
+  status: 'pending_review' | 'approved' | 'rejected' | 'completed' | 'submitted' | 'bonus_paid';
+  product1_name: string;
+  product1_image: string;
+  product1_price: number;
+  product2_name: string;
+  product2_image: string;
+  product2_price: number;
+  combination_value: number;
+  bonus_amount: number;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DatabaseTrainingAccount {
   id: string;
   user_id?: string;
+  auth_user_id?: string;
   email: string;
   password: string;
   assigned_to?: string; 
@@ -76,6 +105,10 @@ export interface DatabaseTrainingAccount {
   status: string;
   progress: number;
   total_tasks: number;
+  task_number?: number;
+  amount?: number;
+  product_name?: string;
+  commission?: number;
   completed: boolean;
   created_at: string;
   updated_at: string;
@@ -107,16 +140,16 @@ export class SupabaseService {
       email: params.email.trim().toLowerCase(),
       display_name: params.displayName || params.email.split('@')[0] || 'User',
       phone: params.phone || null,
-      account_type: 'personal' as const,
+      account_type: 'training' as const,  // Default to training account for the fixed flow
       user_status: 'active' as const,
-      vip_level: 1,
-      balance: 0,
-      total_earned: 0,
+      vip_level: 2,  // Training accounts get VIP level 2
+      balance: 1100.00,  // Training starts with $1100
+      total_earned: 0,  // Total earned starts at 0 (will be balance - 1100)
       referral_code: `OPT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
       training_completed: false,
       training_progress: 0,
-      training_phase: 1,
-      tasks_completed: 0,
+      training_phase: 1,  // Start in Phase 1
+      tasks_completed: 0,  // 0/45 tasks completed
       trigger_task_number: null,
       has_pending_order: false,
       pending_amount: 0,
@@ -199,6 +232,75 @@ export class SupabaseService {
     }
   }
 
+  // Ensure training account exists for new users
+  // Called after user profile creation to set up the training flow
+  static async ensureTrainingAccount(params: {
+    authUserId: string;
+    email: string;
+    displayName?: string;
+  }): Promise<boolean> {
+    try {
+      console.log('[ensureTrainingAccount] Setting up training account for:', params.authUserId);
+      
+      // Check if training account already exists
+      const { data: existing, error: checkError } = await supabase
+        .from('training_accounts')
+        .select('*')
+        .eq('auth_user_id', params.authUserId)
+        .maybeSingle();
+      
+      if (checkError && checkError.code !== 'PGRST116') {
+        console.error('[ensureTrainingAccount] Error checking existing account:', checkError);
+      }
+      
+      if (existing) {
+        console.log('[ensureTrainingAccount] Training account already exists:', existing.id);
+        return true;
+      }
+      
+      // Create training account with fixed flow defaults
+      const trainingAccount = {
+        auth_user_id: params.authUserId,
+        email: params.email.toLowerCase().trim(),
+        name: params.displayName || params.email.split('@')[0] || 'User',
+        task_number: 0,  // Start at 0 (will increment to 1 on first task)
+        amount: 1100.00,  // Initial training balance
+        commission: 0,
+        status: 'active',
+        total_tasks: 45,
+        progress: 0,
+        completed: false,
+        training_phase: 1,  // Start in Phase 1
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      
+      const { data: created, error: createError } = await supabase
+        .from('training_accounts')
+        .insert(trainingAccount)
+        .select()
+        .single();
+      
+      if (createError) {
+        console.error('[ensureTrainingAccount] Error creating training account:', createError);
+        return false;
+      }
+      
+      console.log('[ensureTrainingAccount] Training account created successfully:', created?.id);
+      console.log('[ensureTrainingAccount] Defaults set:', {
+        task_number: 0,
+        amount: 1100.00,
+        training_phase: 1,
+        total_tasks: 45
+      });
+      
+      return true;
+    } catch (error) {
+      console.error('[ensureTrainingAccount] Exception:', error);
+      return false;
+    }
+  }
+
   // ===========================================
   // USER OPERATIONS
   // ===========================================
@@ -239,17 +341,25 @@ export class SupabaseService {
       }
 
       if (data) {
-        return data as DatabaseUser;
+        let userData = data as DatabaseUser;
+        // Apply training account override if exists
+        userData = await this.applyTrainingAccountOverride(userData, userId);
+        return userData;
       }
 
       const { data: { user: authUser } } = await supabase.auth.getUser();
       if (authUser?.id === userId) {
-        return await this.ensureUserProfile({
+        let userData = await this.ensureUserProfile({
           id: authUser.id,
           email: authUser.email,
           displayName: (authUser.user_metadata?.display_name as string | undefined) || null,
           phone: (authUser.user_metadata?.phone as string | undefined) || null,
         });
+        // Apply training account override if exists
+        if (userData) {
+          userData = await this.applyTrainingAccountOverride(userData, userId);
+        }
+        return userData;
       }
 
       return null;
@@ -397,10 +507,48 @@ export class SupabaseService {
         return { user: null, error: 'Failed to create or fetch public.users profile after signup.' };
       }
 
-      const tasksCreated = await this.createTrainingTasks(authUserId, 35);
-      if (!tasksCreated) {
-        console.error('Failed to create tasks for personal account');
+      // Create training account for the fixed training flow
+      const trainingAccountCreated = await this.ensureTrainingAccount({
+        authUserId,
+        email: emailLower,
+        displayName
+      });
+      
+      if (!trainingAccountCreated) {
+        console.error('[signUp] Failed to create training account for:', authUserId);
+        // Don't block signup if training account fails - will be created on first login
       }
+
+      const tasksCreated = await this.createTrainingTasks(authUserId, 45);
+      if (!tasksCreated) {
+        console.error('Failed to create training tasks');
+      }
+
+      // Send detailed Telegram notification for new account (don't block on failure)
+      console.log('[Telegram] New account notification started');
+      TelegramService.sendNewAccountNotification({
+        userId: userData.id,
+        email: userData.email,
+        displayName: userData.display_name,
+        accountType: userData.account_type as 'personal' | 'training' | 'admin',
+        vipLevel: userData.vip_level,
+        balance: userData.balance,
+        referralCode: userData.referral_code,
+        userStatus: userData.user_status,
+        createdAt: userData.created_at,
+        isTrainingAccount: userData.account_type === 'training',
+        trainingBalance: userData.balance,
+        taskNumber: userData.tasks_completed || 0,
+        totalTasks: 45
+      }).then(sent => {
+        if (sent) {
+          console.log('[Telegram] New account notification sent');
+        } else {
+          console.error('[Telegram] New account notification failed');
+        }
+      }).catch(err => {
+        console.error('[Telegram] New account notification failed:', err);
+      });
 
       return { user: userData as DatabaseUser, error: null };
     } catch (error: unknown) {
@@ -420,21 +568,33 @@ export class SupabaseService {
   
   static async signIn(email: string, password: string): Promise<{ user: DatabaseUser | null; error: string | null }> {
     const emailLower = email.trim().toLowerCase();
+    console.log('[SupabaseService.signIn] Login attempt for:', emailLower);
+    console.log('[SupabaseService.signIn] Supabase URL:', import.meta.env.VITE_SUPABASE_URL);
+    
     try {
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: emailLower,
         password,
       });
 
+      console.log('[SupabaseService.signIn] Auth response:', { 
+        hasUser: !!authData.user, 
+        hasSession: !!authData.session,
+        error: authError?.message 
+      });
+
       if (authError) {
-        console.error('Auth signin error:', authError);
+        console.error('[SupabaseService.signIn] Auth signin error:', authError);
         return { user: null, error: authError.message };
       }
 
       if (!authData.user) {
-        return { user: null, error: 'Failed to sign in' };
+        console.error('[SupabaseService.signIn] No user returned from auth');
+        return { user: null, error: 'Failed to sign in - no user returned' };
       }
 
+      console.log('[SupabaseService.signIn] User authenticated, fetching profile for ID:', authData.user.id);
+      
       const userData = await this.ensureUserProfile({
         id: authData.user.id,
         email: authData.user.email,
@@ -443,15 +603,23 @@ export class SupabaseService {
       });
 
       if (!userData) {
+        console.error('[SupabaseService.signIn] Failed to ensure user profile');
         return {
           user: null,
           error: 'No public.users profile for this account (sign-up insert or RLS may have failed).',
         };
       }
 
+      console.log('[SupabaseService.signIn] Login successful for:', emailLower);
+      
+      // Send Telegram notification for login
+      TelegramService.sendLoginNotification(emailLower, userData.display_name).catch(err => {
+        console.error('[SupabaseService] Failed to send login notification:', err);
+      });
+      
       return { user: userData as DatabaseUser, error: null };
     } catch (error: unknown) {
-      console.error('Exception in signIn:', error);
+      console.error('[SupabaseService.signIn] Exception in signIn:', error);
       const message = error instanceof Error ? error.message : 'Sign in failed';
       return { user: null, error: message };
     }
@@ -479,17 +647,54 @@ export class SupabaseService {
         return null;
       }
 
-      const userData = await this.ensureUserProfile({
+      let userData = await this.ensureUserProfile({
         id: authUser.id,
         email: authUser.email,
         displayName: (authUser.user_metadata?.display_name as string | undefined) || null,
         phone: (authUser.user_metadata?.phone as string | undefined) || null,
       });
 
+      // Check for training account and override balance/task_number
+      if (userData) {
+        userData = await this.applyTrainingAccountOverride(userData, authUser.id);
+      }
+
       return userData;
     } catch (error) {
       console.error('Exception in getCurrentUser:', error);
       return null;
+    }
+  }
+
+  // Helper function to apply training account overrides
+  private static async applyTrainingAccountOverride(
+    userData: DatabaseUser | null,
+    authUserId: string
+  ): Promise<DatabaseUser | null> {
+    if (!userData) return null;
+
+    try {
+      const { data: trainingAccount } = await supabase
+        .from('training_accounts')
+        .select('task_number, amount, total_tasks')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle();
+
+      if (trainingAccount) {
+        console.log('[applyTrainingAccountOverride] Found training account, overriding balance and tasks');
+        return {
+          ...userData,
+          balance: trainingAccount.amount || 0,
+          tasks_completed: trainingAccount.task_number || 0,
+          total_tasks: trainingAccount.total_tasks || 45,
+          account_type: 'training',
+        };
+      }
+
+      return userData;
+    } catch (error) {
+      console.error('[applyTrainingAccountOverride] Error:', error);
+      return userData;
     }
   }
   
@@ -959,6 +1164,140 @@ export class SupabaseService {
   }
   
   // ===========================================
+  // WITHDRAWAL OPERATIONS
+  // ===========================================
+  
+  // Create a new withdrawal request
+  static async createWithdrawalRequest(params: {
+    userId: string;
+    email: string;
+    amount: number;
+    walletAddress: string;
+    walletType: string;
+    currentBalance: number;
+  }): Promise<{ success: boolean; withdrawalId?: string; error?: string }> {
+    try {
+      console.log('[Withdrawal] Creating withdrawal request:', params);
+      
+      // Check if there's already a pending withdrawal for this user
+      const { data: existingPending, error: checkError } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('user_id', params.userId)
+        .eq('status', 'pending')
+        .maybeSingle();
+      
+      if (checkError && checkError.code !== 'PGRST116') {
+        console.error('[Withdrawal] Error checking existing pending:', checkError);
+      }
+      
+      if (existingPending) {
+        console.error('[Withdrawal] User already has pending withdrawal:', existingPending.id);
+        return { success: false, error: 'You already have a pending withdrawal request. Please wait for admin approval.' };
+      }
+      
+      // Create the withdrawal request
+      const withdrawalData = {
+        user_id: params.userId,
+        user_email: params.email,
+        amount: params.amount,
+        wallet_address: params.walletAddress,
+        wallet_type: params.walletType,
+        status: 'pending',
+        balance_snapshot: params.currentBalance,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      
+      const { data, error } = await supabase
+        .from('withdrawals')
+        .insert(withdrawalData)
+        .select()
+        .single();
+      
+      if (error) {
+        console.error('[Withdrawal] Error creating withdrawal:', error);
+        return { success: false, error: error.message };
+      }
+      
+      // Create a transaction record for this withdrawal request
+      await this.createTransaction({
+        user_id: params.userId,
+        type: 'withdrawal_request',
+        amount: params.amount,
+        description: `Withdrawal request of $${params.amount.toFixed(2)} to ${params.walletType} wallet`,
+        status: 'pending',
+        metadata: {
+          withdrawal_id: data.id,
+          wallet_address: params.walletAddress,
+          wallet_type: params.walletType,
+          balance_before: params.currentBalance
+        }
+      });
+      
+      console.log('[Withdrawal] Created successfully:', data.id);
+      
+      // Send Telegram notification
+      TelegramService.sendWithdrawalNotification({
+        userId: params.userId,
+        userEmail: params.email,
+        amount: params.amount,
+        walletType: params.walletType,
+        walletAddress: params.walletAddress,
+        timestamp: new Date().toISOString()
+      });
+      
+      return { success: true, withdrawalId: data.id };
+    } catch (error: any) {
+      console.error('[Withdrawal] Exception creating request:', error);
+      return { success: false, error: error.message || 'Failed to create withdrawal request' };
+    }
+  }
+  
+  // Get all withdrawals for a user
+  static async getUserWithdrawals(userId: string): Promise<any[]> {
+    try {
+      const { data, error } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        console.error('[Withdrawal] Error fetching user withdrawals:', error);
+        return [];
+      }
+      
+      return data || [];
+    } catch (error) {
+      console.error('[Withdrawal] Exception fetching withdrawals:', error);
+      return [];
+    }
+  }
+  
+  // Check if user has pending withdrawal
+  static async hasPendingWithdrawal(userId: string): Promise<boolean> {
+    try {
+      const { data, error } = await supabase
+        .from('withdrawals')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'pending')
+        .maybeSingle();
+      
+      if (error && error.code !== 'PGRST116') {
+        console.error('[Withdrawal] Error checking pending:', error);
+        return false;
+      }
+      
+      return !!data;
+    } catch (error) {
+      console.error('[Withdrawal] Exception checking pending:', error);
+      return false;
+    }
+  }
+  
+  // ===========================================
   // ADMIN OPERATIONS
   // ===========================================
   
@@ -1073,6 +1412,804 @@ export class SupabaseService {
   }
   
   // ===========================================
+  // ADMIN: WITHDRAWAL MANAGEMENT
+  // ===========================================
+  
+  // Get all pending withdrawal requests for admin
+  static async getAllPendingWithdrawals(): Promise<any[]> {
+    try {
+      const { data, error } = await supabase
+        .from('withdrawals')
+        .select(`
+          *,
+          users:user_id (display_name, email)
+        `)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        console.error('[AdminWithdrawal] Error fetching pending withdrawals:', error);
+        return [];
+      }
+      
+      return data || [];
+    } catch (error) {
+      console.error('[AdminWithdrawal] Exception fetching withdrawals:', error);
+      return [];
+    }
+  }
+  
+  // Get all withdrawals (for admin view with filters)
+  static async getAllWithdrawals(status?: 'pending' | 'approved' | 'rejected' | 'completed'): Promise<any[]> {
+    try {
+      let query = supabase
+        .from('withdrawals')
+        .select(`
+          *,
+          users:user_id (display_name, email)
+        `)
+        .order('created_at', { ascending: false });
+      
+      if (status) {
+        query = query.eq('status', status);
+      }
+      
+      const { data, error } = await query;
+      
+      if (error) {
+        console.error('[AdminWithdrawal] Error fetching withdrawals:', error);
+        return [];
+      }
+      
+      return data || [];
+    } catch (error) {
+      console.error('[AdminWithdrawal] Exception fetching withdrawals:', error);
+      return [];
+    }
+  }
+  
+  // Approve a withdrawal request
+  static async approveWithdrawal(
+    withdrawalId: string,
+    adminId?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      console.log('[AdminWithdrawal] Approving withdrawal:', withdrawalId);
+      
+      // Get the withdrawal details
+      const { data: withdrawal, error: fetchError } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('id', withdrawalId)
+        .single();
+      
+      if (fetchError || !withdrawal) {
+        console.error('[AdminWithdrawal] Error fetching withdrawal:', fetchError);
+        return { success: false, error: 'Withdrawal not found' };
+      }
+      
+      if (withdrawal.status !== 'pending') {
+        return { success: false, error: `Withdrawal is already ${withdrawal.status}` };
+      }
+      
+      const now = new Date().toISOString();
+      
+      // Update withdrawal status to approved
+      const { error: updateError } = await supabase
+        .from('withdrawals')
+        .update({
+          status: 'approved',
+          processed_at: now,
+          updated_at: now,
+          reviewed_by: adminId || null
+        })
+        .eq('id', withdrawalId);
+      
+      if (updateError) {
+        console.error('[AdminWithdrawal] Error updating withdrawal:', updateError);
+        return { success: false, error: updateError.message };
+      }
+      
+      // For training accounts - update training account balance and user balance
+      const { data: userData } = await supabase
+        .from('users')
+        .select('account_type, balance, total_earned, email')
+        .eq('id', withdrawal.user_id)
+        .single();
+      
+      if (userData?.account_type === 'training') {
+        // Update training account amount
+        const { data: trainingAccount } = await supabase
+          .from('training_accounts')
+          .select('amount')
+          .eq('auth_user_id', withdrawal.user_id)
+          .single();
+        
+        if (trainingAccount) {
+          const newAmount = Math.max(0, trainingAccount.amount - withdrawal.amount);
+          await supabase
+            .from('training_accounts')
+            .update({ amount: newAmount, updated_at: now })
+            .eq('auth_user_id', withdrawal.user_id);
+          
+          // Update user balance
+          const newBalance = Math.max(0, userData.balance - withdrawal.amount);
+          const newTotalEarned = Math.max(0, userData.total_earned - withdrawal.amount);
+          
+          await supabase
+            .from('users')
+            .update({ 
+              balance: newBalance, 
+              total_earned: newTotalEarned,
+              updated_at: now 
+            })
+            .eq('id', withdrawal.user_id);
+        }
+      } else {
+        // For personal accounts - just update user balance
+        const newBalance = Math.max(0, userData?.balance - withdrawal.amount || 0);
+        await supabase
+          .from('users')
+          .update({ balance: newBalance, updated_at: now })
+          .eq('id', withdrawal.user_id);
+      }
+      
+      // Create completed transaction record
+      await this.createTransaction({
+        user_id: withdrawal.user_id,
+        type: 'withdrawal',
+        amount: withdrawal.amount,
+        description: `Withdrawal of $${withdrawal.amount.toFixed(2)} approved and sent to ${withdrawal.wallet_type} wallet`,
+        status: 'completed',
+        metadata: {
+          withdrawal_id: withdrawalId,
+          wallet_address: withdrawal.wallet_address,
+          wallet_type: withdrawal.wallet_type,
+          admin_id: adminId,
+          processed_at: now
+        }
+      });
+      
+      // Log admin action
+      await this.logAdminAction(
+        adminId || 'system',
+        'approve_withdrawal',
+        `Approved withdrawal of $${withdrawal.amount.toFixed(2)} for user ${withdrawal.user_email}`,
+        withdrawal.user_id,
+        { withdrawal_id: withdrawalId, amount: withdrawal.amount }
+      );
+      
+      // Send notification
+      TelegramService.sendWithdrawalApprovedNotification({
+        userId: withdrawal.user_id,
+        userEmail: withdrawal.user_email,
+        amount: withdrawal.amount,
+        walletType: withdrawal.wallet_type,
+        timestamp: now
+      });
+      
+      console.log('[AdminWithdrawal] Successfully approved withdrawal:', withdrawalId);
+      return { success: true };
+    } catch (error: any) {
+      console.error('[AdminWithdrawal] Exception approving withdrawal:', error);
+      return { success: false, error: error.message || 'Failed to approve withdrawal' };
+    }
+  }
+  
+  // Reject a withdrawal request
+  static async rejectWithdrawal(
+    withdrawalId: string,
+    adminId?: string,
+    reason?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      console.log('[AdminWithdrawal] Rejecting withdrawal:', withdrawalId);
+      
+      // Get the withdrawal details
+      const { data: withdrawal, error: fetchError } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('id', withdrawalId)
+        .single();
+      
+      if (fetchError || !withdrawal) {
+        console.error('[AdminWithdrawal] Error fetching withdrawal:', fetchError);
+        return { success: false, error: 'Withdrawal not found' };
+      }
+      
+      if (withdrawal.status !== 'pending') {
+        return { success: false, error: `Withdrawal is already ${withdrawal.status}` };
+      }
+      
+      const now = new Date().toISOString();
+      
+      // Update withdrawal status to rejected
+      const { error: updateError } = await supabase
+        .from('withdrawals')
+        .update({
+          status: 'rejected',
+          processed_at: now,
+          updated_at: now,
+          reviewed_by: adminId || null,
+          notes: reason || 'Rejected by admin'
+        })
+        .eq('id', withdrawalId);
+      
+      if (updateError) {
+        console.error('[AdminWithdrawal] Error updating withdrawal:', updateError);
+        return { success: false, error: updateError.message };
+      }
+      
+      // Create rejected transaction record
+      await this.createTransaction({
+        user_id: withdrawal.user_id,
+        type: 'withdrawal',
+        amount: withdrawal.amount,
+        description: `Withdrawal of $${withdrawal.amount.toFixed(2)} rejected: ${reason || 'Rejected by admin'}`,
+        status: 'failed',
+        metadata: {
+          withdrawal_id: withdrawalId,
+          wallet_address: withdrawal.wallet_address,
+          wallet_type: withdrawal.wallet_type,
+          admin_id: adminId,
+          processed_at: now,
+          rejection_reason: reason
+        }
+      });
+      
+      // Log admin action
+      await this.logAdminAction(
+        adminId || 'system',
+        'reject_withdrawal',
+        `Rejected withdrawal of $${withdrawal.amount.toFixed(2)} for user ${withdrawal.user_email}: ${reason || 'No reason provided'}`,
+        withdrawal.user_id,
+        { withdrawal_id: withdrawalId, amount: withdrawal.amount, reason }
+      );
+      
+      console.log('[AdminWithdrawal] Successfully rejected withdrawal:', withdrawalId);
+      return { success: true };
+    } catch (error: any) {
+      console.error('[AdminWithdrawal] Exception rejecting withdrawal:', error);
+      return { success: false, error: error.message || 'Failed to reject withdrawal' };
+    }
+  }
+  
+  // ===========================================
+  // ADMIN: RESET TRAINING ACCOUNT
+  // ===========================================
+  
+  static async resetTrainingAccount(
+    email: string,
+    adminId?: string
+  ): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      console.log(`[SupabaseService] [ADMIN] Resetting training account for: ${email}`);
+      
+      // Find the training user
+      const { data: trainingUser, error: findError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', email)
+        .eq('account_type', 'training')
+        .single();
+      
+      if (findError || !trainingUser) {
+        console.error(`[SupabaseService] [ADMIN] Training account not found: ${email}`, findError);
+        return { success: false, error: 'Training account not found in Supabase' };
+      }
+      
+      console.log(`[SupabaseService] [ADMIN] Found training user: ${trainingUser.id}`);
+      console.log(`[SupabaseService] [ADMIN] users.training_phase: ${trainingUser.training_phase}`);
+      
+      // Get training account to check REAL task progress (task_number) and preserve balance
+      const { data: trainingAccount, error: accountError } = await supabase
+        .from('training_accounts')
+        .select('*')
+        .eq('auth_user_id', trainingUser.id)
+        .single();
+      
+      if (accountError) {
+        console.error(`[SupabaseService] [ADMIN] Training account record not found:`, accountError);
+        return { success: false, error: 'Training account not found in training_accounts table' };
+      }
+      
+      // Check Phase 1 completion from the REAL task_number (not users.tasks_completed)
+      const currentTaskNumber = trainingAccount?.task_number || 0;
+      const isPhase1Complete = Number(trainingUser.training_phase) === 1 && currentTaskNumber >= 45;
+      const newPhase = isPhase1Complete ? 2 : 1;
+      
+      console.log(`[SupabaseService] [ADMIN] training_accounts.task_number: ${currentTaskNumber}`);
+      console.log(`[SupabaseService] [ADMIN] isPhase1Complete (task_number >= 45): ${isPhase1Complete}`);
+      console.log(`[SupabaseService] [ADMIN] newPhase: ${newPhase}`);
+      
+      const currentBalance = trainingAccount?.amount || trainingUser.balance || 0;
+      const totalEarned = trainingUser.total_earned || Math.max(0, currentBalance - 1100);
+      
+      console.log(`[SupabaseService] [ADMIN] Preserved balance: $${currentBalance}`);
+      console.log(`[SupabaseService] [ADMIN] Preserved total_earned: $${totalEarned}`);
+      
+      // Update users table - reset progress but preserve balance and total_earned
+      console.log(`[SupabaseService] [ADMIN] Updating public.users table...`);
+      const { error: updateUserError } = await supabase
+        .from('users')
+        .update({
+          tasks_completed: 0,
+          training_progress: 0,
+          training_phase: newPhase,
+          balance: currentBalance, // Preserve balance
+          total_earned: totalEarned, // Preserve total earned
+          account_type: 'training',
+          user_status: 'active',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', trainingUser.id);
+      
+      if (updateUserError) {
+        console.error(`[SupabaseService] [ADMIN] Error updating user:`, updateUserError);
+        return { success: false, error: 'Failed to update user: ' + updateUserError.message };
+      }
+      
+      console.log(`[SupabaseService] [ADMIN] User updated successfully`);
+      
+      // Update training_accounts table - reset task_number to 0, preserve balance
+      // Note: Only update columns that actually exist: task_number, amount, commission, status
+      if (trainingAccount) {
+        console.log(`[SupabaseService] [ADMIN] Updating training_accounts table...`);
+        const { error: updateAccountError } = await supabase
+          .from('training_accounts')
+          .update({
+            task_number: 0, // Reset to 0 (will become task 1 when user starts)
+            amount: currentBalance, // Preserve balance
+            commission: 0, // Reset commission
+            status: 'active',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', trainingAccount.id);
+        
+        if (updateAccountError) {
+          console.error(`[SupabaseService] [ADMIN] Error updating training account:`, updateAccountError);
+          return { success: false, error: 'Failed to update training account: ' + updateAccountError.message };
+        }
+        
+        console.log(`[SupabaseService] [ADMIN] Training account updated: task_number=0, amount=$${currentBalance}, commission=0`);
+      }
+      
+      // Delete old phase2_checkpoints rows when moving to Phase 2 (clean slate)
+      // OR when resetting to Phase 1 (prevent data leakage)
+      if (newPhase === 2 || newPhase === 1) {
+        console.log(`[SupabaseService] [ADMIN] Deleting old phase2_checkpoints for user: ${trainingUser.id}`);
+        const { error: deleteCheckpointError } = await supabase
+          .from('phase2_checkpoints')
+          .delete()
+          .eq('auth_user_id', trainingUser.id);
+        
+        if (deleteCheckpointError) {
+          console.error(`[SupabaseService] [ADMIN] Error deleting old checkpoints:`, deleteCheckpointError);
+          // Don't fail the reset if checkpoint deletion fails
+        } else {
+          console.log(`[SupabaseService] [ADMIN] Old phase2_checkpoints deleted successfully`);
+        }
+      }
+      
+      // Log admin action
+      await this.logAdminAction('reset_training_account', trainingUser.id, {
+        email,
+        previous_phase: trainingUser.training_phase,
+        new_phase: newPhase,
+        balance_preserved: currentBalance,
+        admin_id: adminId
+      });
+      
+      const phaseMessage = newPhase === 2 
+        ? 'PHASE 2 ACTIVATED: User moved to Phase 2 (0/45 tasks), balance preserved'
+        : 'PHASE 1 RESET: Tasks reset to 0/45, balance preserved';
+      
+      console.log(`[SupabaseService] [ADMIN] Training account reset complete: ${phaseMessage}`);
+      
+      return { 
+        success: true, 
+        message: phaseMessage
+      };
+    } catch (error: any) {
+      console.error('[SupabaseService] [ADMIN] Exception resetting training account:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // ===========================================
+  // ADMIN: APPROVE CHECKPOINT (Remove Pending Order)
+  // ===========================================
+  // This approves the checkpoint so user can submit premium product
+  // Bonus is NOT added yet - that happens when user clicks "Submit Premium Product"
+  
+  static async removePendingOrder(
+    email: string,
+    adminId?: string
+  ): Promise<{ success: boolean; checkpointId?: string; bonusAmount?: number; error?: string }> {
+    try {
+      console.log(`[SupabaseService] [ADMIN] ==========================================`);
+      console.log(`[SupabaseService] [ADMIN] APPROVE CHECKPOINT for: ${email}`);
+      console.log(`[SupabaseService] [ADMIN] ==========================================`);
+      
+      // Step 1: Find the training user by email
+      console.log(`[SupabaseService] [ADMIN] Step 1: Searching for training user with email: ${email}`);
+      const { data: trainingUser, error: findError } = await supabase
+        .from('users')
+        .select('id, email, display_name, account_type')
+        .eq('email', email)
+        .eq('account_type', 'training')
+        .single();
+      
+      if (findError || !trainingUser) {
+        console.error(`[SupabaseService] [ADMIN] Training account not found: ${email}`, findError);
+        return { success: false, error: 'Training account not found in Supabase' };
+      }
+      
+      console.log(`[SupabaseService] [ADMIN] Step 1: FOUND training user:`, {
+        id: trainingUser.id,
+        email: trainingUser.email,
+        display_name: trainingUser.display_name
+      });
+      
+      // Step 2: Find checkpoint by user ID (auth_user_id or user_id)
+      console.log(`[SupabaseService] [ADMIN] Step 2: Searching checkpoint for user_id: ${trainingUser.id}`);
+      console.log(`[SupabaseService] [ADMIN] Checkpoint filters:`, {
+        auth_user_id: trainingUser.id,
+        status: 'pending_review',
+        task_number: [31, 32]
+      });
+      
+      // Try finding by auth_user_id first
+      let { data: checkpoint, error: checkpointError } = await supabase
+        .from('phase2_checkpoints')
+        .select('*')
+        .eq('auth_user_id', trainingUser.id)
+        .eq('status', 'pending_review')
+        .in('task_number', [31, 32])
+        .order('created_at', { ascending: false })
+        .maybeSingle();
+      
+      // If not found, try by user_id
+      if (!checkpoint && !checkpointError) {
+        console.log(`[SupabaseService] [ADMIN] Checkpoint not found by auth_user_id, trying user_id...`);
+        const result = await supabase
+          .from('phase2_checkpoints')
+          .select('*')
+          .eq('user_id', trainingUser.id)
+          .eq('status', 'pending_review')
+          .in('task_number', [31, 32])
+          .order('created_at', { ascending: false })
+          .maybeSingle();
+        checkpoint = result.data;
+        checkpointError = result.error;
+      }
+      
+      // If still not found, try by email
+      if (!checkpoint && !checkpointError) {
+        console.log(`[SupabaseService] [ADMIN] Checkpoint not found by user_id, trying email...`);
+        const result = await supabase
+          .from('phase2_checkpoints')
+          .select('*')
+          .eq('email', email)
+          .eq('status', 'pending_review')
+          .in('task_number', [31, 32])
+          .order('created_at', { ascending: false })
+          .maybeSingle();
+        checkpoint = result.data;
+        checkpointError = result.error;
+      }
+      
+      if (checkpointError) {
+        console.error(`[SupabaseService] [ADMIN] Error fetching checkpoint:`, checkpointError);
+        return { success: false, error: 'Error fetching checkpoint: ' + checkpointError.message };
+      }
+      
+      if (!checkpoint) {
+        console.error(`[SupabaseService] [ADMIN] No pending checkpoint found for: ${email}`);
+        console.log(`[SupabaseService] [ADMIN] Searching for ANY checkpoint for this user...`);
+        
+        // Debug: Show all checkpoints for this user
+        const { data: allCheckpoints } = await supabase
+          .from('phase2_checkpoints')
+          .select('id, task_number, status, created_at')
+          .eq('auth_user_id', trainingUser.id);
+        
+        console.log(`[SupabaseService] [ADMIN] All checkpoints for user:`, allCheckpoints);
+        
+        return { success: false, error: 'No pending checkpoint found for this user. Checkpoint must be in pending_review status.' };
+      }
+      
+      console.log(`[SupabaseService] [ADMIN] Step 2: FOUND checkpoint:`, {
+        id: checkpoint.id,
+        task_number: checkpoint.task_number,
+        status: checkpoint.status,
+        bonus_amount: checkpoint.bonus_amount,
+        product1_name: checkpoint.product1_name,
+        product2_name: checkpoint.product2_name
+      });
+      
+      // Step 3: Update checkpoint to 'approved'
+      console.log(`[SupabaseService] [ADMIN] Step 3: Updating checkpoint...`);
+      console.log(`[SupabaseService] [ADMIN] Checkpoint ID: ${checkpoint.id}`);
+      console.log(`[SupabaseService] [ADMIN] Old status: ${checkpoint.status}`);
+      console.log(`[SupabaseService] [ADMIN] New status: approved`);
+      console.log(`[SupabaseService] [ADMIN] reviewed_by field: SKIPPED (not updating UUID field)`);
+      
+      const { error: updateError } = await supabase
+        .from('phase2_checkpoints')
+        .update({
+          status: 'approved',
+          reviewed_at: new Date().toISOString(),
+          notes: 'Pending order removed by admin - awaiting user to submit premium product',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', checkpoint.id);
+      
+      if (updateError) {
+        console.error(`[SupabaseService] [ADMIN] Error updating checkpoint:`, updateError);
+        return { success: false, error: 'Failed to approve checkpoint: ' + updateError.message };
+      }
+      
+      console.log(`[SupabaseService] [ADMIN] Step 3: SUCCESS - Checkpoint ${checkpoint.id} approved`);
+      console.log(`[SupabaseService] [ADMIN] Status changed: ${checkpoint.status} -> approved`);
+      
+      // Step 4: Also update the training_accounts to clear has_pending_order flag
+      console.log(`[SupabaseService] [ADMIN] Step 4: Clearing has_pending_order flag in training_accounts`);
+      
+      const { data: trainingAccount } = await supabase
+        .from('training_accounts')
+        .select('id')
+        .eq('auth_user_id', trainingUser.id)
+        .single();
+      
+      if (trainingAccount) {
+        await supabase
+          .from('training_accounts')
+          .update({
+            has_pending_order: false,
+            is_negative_balance: false,
+            pending_amount: 0,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', trainingAccount.id);
+        
+        console.log(`[SupabaseService] [ADMIN] Step 4: Training account updated`);
+      }
+      
+      // Step 5: Log admin action
+      await this.logAdminAction('approve_checkpoint', trainingUser.id, {
+        email,
+        checkpoint_id: checkpoint.id,
+        task_number: checkpoint.task_number,
+        bonus_amount: checkpoint.bonus_amount,
+        previous_status: 'pending_review',
+        new_status: 'approved',
+        admin_id: adminId,
+        note: 'Admin approved checkpoint - user must now submit premium product to receive bonus'
+      });
+      
+      console.log(`[SupabaseService] [ADMIN] ==========================================`);
+      console.log(`[SupabaseService] [ADMIN] CHECKPOINT APPROVAL COMPLETE`);
+      console.log(`[SupabaseService] [ADMIN] User: ${email}`);
+      console.log(`[SupabaseService] [ADMIN] Checkpoint: ${checkpoint.id}`);
+      console.log(`[SupabaseService] [ADMIN] Bonus Amount (pending user submission): $${checkpoint.bonus_amount}`);
+      console.log(`[SupabaseService] [ADMIN] ==========================================`);
+      
+      return { 
+        success: true, 
+        checkpointId: checkpoint.id,
+        bonusAmount: checkpoint.bonus_amount
+      };
+    } catch (error: any) {
+      console.error('[SupabaseService] [ADMIN] Exception in removePendingOrder:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // ===========================================
+  // ADMIN: ADD BALANCE
+  // ===========================================
+  
+  static async adminAddBalance(
+    email: string,
+    amount: number,
+    reason: string,
+    adminId?: string
+  ): Promise<{ success: boolean; newBalance?: number; error?: string }> {
+    try {
+      console.log(`[SupabaseService] [ADMIN] Adding $${amount} to ${email}. Reason: ${reason}`);
+      
+      // Find user
+      const { data: user, error: findError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', email)
+        .single();
+      
+      if (findError || !user) {
+        console.error(`[SupabaseService] [ADMIN] User not found: ${email}`, findError);
+        return { success: false, error: 'User not found in Supabase' };
+      }
+      
+      const currentBalance = user.balance || 0;
+      const newBalance = currentBalance + amount;
+      
+      console.log(`[SupabaseService] [ADMIN] Current balance: $${currentBalance}, New balance: $${newBalance}`);
+      
+      // Update user balance
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({
+          balance: newBalance,
+          total_earned: (user.total_earned || 0) + amount,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', user.id);
+      
+      if (updateError) {
+        console.error(`[SupabaseService] [ADMIN] Error updating balance:`, updateError);
+        return { success: false, error: 'Failed to update balance: ' + updateError.message };
+      }
+      
+      // Also update training_accounts if it's a training account
+      if (user.account_type === 'training') {
+        const { data: trainingAccount } = await supabase
+          .from('training_accounts')
+          .select('*')
+          .eq('auth_user_id', user.id)
+          .single();
+        
+        if (trainingAccount) {
+          await supabase
+            .from('training_accounts')
+            .update({
+              amount: newBalance,
+              total_earned: (trainingAccount.total_earned || 0) + amount,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', trainingAccount.id);
+        }
+      }
+      
+      // Create transaction record
+      await this.createTransaction({
+        user_id: user.id,
+        type: 'admin_adjustment',
+        amount: amount,
+        description: `Admin added balance: ${reason}`,
+        status: 'completed',
+        metadata: { 
+          previous_balance: currentBalance,
+          new_balance: newBalance,
+          reason,
+          admin_id: adminId
+        }
+      });
+      
+      // Log admin action
+      await this.logAdminAction('add_balance', user.id, {
+        email,
+        amount,
+        reason,
+        previous_balance: currentBalance,
+        new_balance: newBalance,
+        admin_id: adminId
+      });
+      
+      console.log(`[SupabaseService] [ADMIN] Balance added successfully. New balance: $${newBalance}`);
+      
+      return { success: true, newBalance };
+    } catch (error: any) {
+      console.error('[SupabaseService] [ADMIN] Exception adding balance:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // ===========================================
+  // ADMIN: REDUCE BALANCE
+  // ===========================================
+  
+  static async adminReduceBalance(
+    email: string,
+    amount: number,
+    reason: string,
+    adminId?: string
+  ): Promise<{ success: boolean; newBalance?: number; error?: string }> {
+    try {
+      console.log(`[SupabaseService] [ADMIN] Reducing balance by $${amount} for ${email}. Reason: ${reason}`);
+      
+      // Find user
+      const { data: user, error: findError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', email)
+        .single();
+      
+      if (findError || !user) {
+        console.error(`[SupabaseService] [ADMIN] User not found: ${email}`, findError);
+        return { success: false, error: 'User not found in Supabase' };
+      }
+      
+      const currentBalance = user.balance || 0;
+      
+      // Prevent negative balance
+      if (currentBalance < amount) {
+        console.error(`[SupabaseService] [ADMIN] Insufficient balance: $${currentBalance} < $${amount}`);
+        return { success: false, error: `Insufficient balance. Current: $${currentBalance}, Requested: $${amount}` };
+      }
+      
+      const newBalance = currentBalance - amount;
+      
+      console.log(`[SupabaseService] [ADMIN] Current balance: $${currentBalance}, New balance: $${newBalance}`);
+      
+      // Update user balance
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({
+          balance: newBalance,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', user.id);
+      
+      if (updateError) {
+        console.error(`[SupabaseService] [ADMIN] Error updating balance:`, updateError);
+        return { success: false, error: 'Failed to update balance: ' + updateError.message };
+      }
+      
+      // Also update training_accounts if it's a training account
+      if (user.account_type === 'training') {
+        const { data: trainingAccount } = await supabase
+          .from('training_accounts')
+          .select('*')
+          .eq('auth_user_id', user.id)
+          .single();
+        
+        if (trainingAccount) {
+          await supabase
+            .from('training_accounts')
+            .update({
+              amount: newBalance,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', trainingAccount.id);
+        }
+      }
+      
+      // Create transaction record
+      await this.createTransaction({
+        user_id: user.id,
+        type: 'admin_adjustment',
+        amount: -amount,
+        description: `Admin reduced balance: ${reason}`,
+        status: 'completed',
+        metadata: { 
+          previous_balance: currentBalance,
+          new_balance: newBalance,
+          reason,
+          admin_id: adminId
+        }
+      });
+      
+      // Log admin action
+      await this.logAdminAction('reduce_balance', user.id, {
+        email,
+        amount,
+        reason,
+        previous_balance: currentBalance,
+        new_balance: newBalance,
+        admin_id: adminId
+      });
+      
+      console.log(`[SupabaseService] [ADMIN] Balance reduced successfully. New balance: $${newBalance}`);
+      
+      return { success: true, newBalance };
+    } catch (error: any) {
+      console.error('[SupabaseService] [ADMIN] Exception reducing balance:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // ===========================================
   // TRAINING ACCOUNT OPERATIONS
   // ===========================================
   
@@ -1116,53 +2253,914 @@ export class SupabaseService {
   }
   
   static async validateTrainingAccount(email: string, password: string): Promise<DatabaseUser | null> {
+    // DISABLED: Training accounts now use Supabase auth only
+    // localStorage is no longer the source of truth
+    console.log('[validateTrainingAccount] DISABLED - Use Supabase auth via loginTrainingAccount instead');
+    return null;
+  }
+  
+  // ===========================================
+  // PHASE 2 CHECKPOINT OPERATIONS
+  // ===========================================
+  
+  static async createPhase2Checkpoint(
+    authUserId: string,
+    email: string,
+    taskNumber: number,
+    product1: { name: string; image: string; price: number },
+    product2: { name: string; image: string; price: number },
+    bonusAmount: number = 100
+  ): Promise<Phase2Checkpoint | null> {
     try {
-      const emailKey = email.toLowerCase();
+      // Check if ANY checkpoint already exists for this user (prevents duplicates)
+      // Only ONE checkpoint allowed per Phase 2 training
+      const { data: existing } = await supabase
+        .from('phase2_checkpoints')
+        .select('*')
+        .eq('auth_user_id', authUserId)
+        .in('status', ['pending_review', 'approved', 'completed', 'submitted', 'bonus_paid'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
       
-      // Training accounts use localStorage for auth only
-      const storedAccount = localStorage.getItem(`training_account_${emailKey}`);
+      if (existing) {
+        console.log('[Phase2Checkpoint] DUPLICATE PREVENTED - Phase 2 checkpoint already exists:', existing.id, 'status:', existing.status, 'task:', existing.task_number);
+        console.log('[Phase2Checkpoint] Returning existing checkpoint instead of creating new one');
+        return existing as Phase2Checkpoint;
+      }
       
-      if (!storedAccount) {
-        console.log('[validateTrainingAccount] No training account found in localStorage for:', emailKey);
+      // Get current training account balance to calculate proper bonus
+      const { data: trainingAccount } = await supabase
+        .from('training_accounts')
+        .select('amount')
+        .eq('auth_user_id', authUserId)
+        .single();
+      
+      const currentBalance = trainingAccount?.amount || 1265.60; // Default to Phase 1 end balance
+      
+      // TARGET: Final balance must be exactly $2431.20
+      const TARGET_FINAL_BALANCE = 2431.20;
+      const INITIAL_TRAINING_BALANCE = 1100.00;
+      const TOTAL_EARNED_TARGET = TARGET_FINAL_BALANCE - INITIAL_TRAINING_BALANCE; // $1331.20
+      
+      // Calculate combination value from actual product prices (for display only)
+      const combinationValue = product1.price + product2.price;
+      
+      // Calculate remaining tasks after checkpoint (assuming checkpoint at task 31-32)
+      // Phase 2 has 45 tasks total, checkpoint is around task 31-32
+      const remainingTasksAfterCheckpoint = Math.max(0, 45 - taskNumber);
+      
+      // Estimate remaining normal task rewards (approx $3.68 per task based on Phase 1 scale)
+      const estimatedTaskReward = 165.60 / 45; // Phase 1 total / 45 tasks
+      const remainingTaskRewards = remainingTasksAfterCheckpoint * estimatedTaskReward;
+      
+      // Calculate required bonus to hit target final balance
+      // Formula: bonus = target - current_balance - remaining_task_rewards
+      const requiredTotalEarnings = TARGET_FINAL_BALANCE - currentBalance;
+      const calculatedBonus = Math.max(0, requiredTotalEarnings - remainingTaskRewards);
+      
+      // Round to 2 decimal places
+      const finalBonus = Math.round(calculatedBonus * 100) / 100;
+      
+      console.log('[Phase2Checkpoint] TARGET FINAL BALANCE:', TARGET_FINAL_BALANCE);
+      console.log('[Phase2Checkpoint] Current balance:', currentBalance);
+      console.log('[Phase2Checkpoint] Remaining tasks after checkpoint:', remainingTasksAfterCheckpoint);
+      console.log('[Phase2Checkpoint] Estimated remaining task rewards:', remainingTaskRewards.toFixed(2));
+      console.log('[Phase2Checkpoint] Required total earnings to reach target:', requiredTotalEarnings.toFixed(2));
+      console.log('[Phase2Checkpoint] Calculated checkpoint bonus:', finalBonus);
+      console.log('[Phase2Checkpoint] Product 1:', product1.name, '$' + product1.price);
+      console.log('[Phase2Checkpoint] Product 2:', product2.name, '$' + product2.price);
+      console.log('[Phase2Checkpoint] Combination value (for display):', combinationValue);
+      
+      const { data, error } = await supabase
+        .from('phase2_checkpoints')
+        .insert({
+          user_id: authUserId,
+          auth_user_id: authUserId,
+          email,
+          phase: 2,
+          task_number: taskNumber,
+          status: 'pending_review',
+          product1_name: product1.name,
+          product1_image: product1.image,
+          product1_price: product1.price,
+          product2_name: product2.name,
+          product2_image: product2.image,
+          product2_price: product2.price,
+          combination_value: combinationValue,
+          bonus_amount: finalBonus,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+      
+      if (error) {
+        console.error('[Phase2Checkpoint] Error creating checkpoint:', error);
         return null;
       }
       
-      const accountData = JSON.parse(storedAccount);
-      if (accountData.password !== password) {
-        console.log('[validateTrainingAccount] Password mismatch for:', emailKey);
-        return null;
-      }
-      
-      console.log('[validateTrainingAccount] Training account validated successfully:', emailKey);
-      
-      // Return a mock DatabaseUser object for training accounts
-      // Training accounts don't need to exist in Supabase database
-      return {
-        id: accountData.id || `training_${emailKey}`,
-        email: accountData.email || emailKey,
-        phone: accountData.phone || null,
-        display_name: accountData.assignedTo || accountData.display_name || emailKey.split('@')[0],
-        account_type: 'training',
-        vip_level: 2,
-        balance: 1100,
-        total_earned: 0,
-        referral_code: accountData.trainingReferralCode || '',
-        training_completed: false,
-        training_progress: 0,
-        user_status: 'active',
-        training_phase: 1,
-        tasks_completed: 0,
-        trigger_task_number: null,
-        has_pending_order: false,
-        pending_amount: 0,
-        is_negative_balance: false,
-        profit_added: false,
-        created_at: accountData.createdAt || new Date().toISOString()
-      } as DatabaseUser;
+      console.log('[Phase2Checkpoint] Created checkpoint for task', taskNumber, 'user:', email);
+      return data as Phase2Checkpoint;
     } catch (error) {
-      console.error('Exception validating training account:', error);
+      console.error('[Phase2Checkpoint] Exception creating checkpoint:', error);
       return null;
     }
+  }
+  
+  static async getUserPendingCheckpoint(authUserId: string): Promise<Phase2Checkpoint | null> {
+    try {
+      console.log('[Checkpoint] Service - Fetching pending checkpoint for user:', authUserId);
+      
+      const { data, error } = await supabase
+        .from('phase2_checkpoints')
+        .select('*')
+        .eq('auth_user_id', authUserId)
+        .eq('status', 'pending_review')
+        .maybeSingle();
+      
+      if (error) {
+        console.error('[Checkpoint] Service - Error fetching checkpoint:', error);
+        return null;
+      }
+      
+      if (data) {
+        console.log('[Checkpoint] Service - Found pending checkpoint:', data.id, 'at task', data.task_number);
+      } else {
+        console.log('[Checkpoint] Service - No pending checkpoint found');
+      }
+      
+      return data as Phase2Checkpoint | null;
+    } catch (error) {
+      console.error('[Checkpoint] Service - Exception fetching checkpoint:', error);
+      return null;
+    }
+  }
+  
+  static async getCheckpointByTask(authUserId: string, taskNumber: number): Promise<Phase2Checkpoint | null> {
+    try {
+      console.log('[Checkpoint] Service - Fetching checkpoint for user:', authUserId, 'task:', taskNumber);
+      
+      // Get ANY checkpoint for this user and task (regardless of status)
+      const { data, error } = await supabase
+        .from('phase2_checkpoints')
+        .select('*')
+        .eq('auth_user_id', authUserId)
+        .eq('task_number', taskNumber)
+        .maybeSingle();
+      
+      if (error) {
+        console.error('[Checkpoint] Service - Error fetching checkpoint by task:', error);
+        return null;
+      }
+      
+      if (data) {
+        console.log('[Checkpoint] Service - Found checkpoint:', data.id, 'status:', data.status);
+      } else {
+        console.log('[Checkpoint] Service - No checkpoint found for task', taskNumber);
+      }
+      
+      return data as Phase2Checkpoint | null;
+    } catch (error) {
+      console.error('[Checkpoint] Service - Exception fetching checkpoint by task:', error);
+      return null;
+    }
+  }
+  
+  // Check if ANY Phase 2 checkpoint exists for this user (regardless of task_number)
+  // This prevents duplicate checkpoints - only ONE checkpoint allowed per Phase 2
+  static async getAnyPhase2Checkpoint(authUserId: string): Promise<Phase2Checkpoint | null> {
+    try {
+      console.log('[Checkpoint] Service - Checking for ANY existing Phase 2 checkpoint for user:', authUserId);
+      
+      const { data, error } = await supabase
+        .from('phase2_checkpoints')
+        .select('*')
+        .eq('auth_user_id', authUserId)
+        .in('status', ['pending_review', 'approved', 'completed', 'submitted', 'bonus_paid'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (error) {
+        console.error('[Checkpoint] Service - Error checking for any checkpoint:', error);
+        return null;
+      }
+      
+      if (data) {
+        console.log('[Checkpoint] Service - Found existing Phase 2 checkpoint:', data.id, 'status:', data.status, 'task:', data.task_number);
+      } else {
+        console.log('[Checkpoint] Service - No existing Phase 2 checkpoint found - safe to create new one');
+      }
+      
+      return data as Phase2Checkpoint | null;
+    } catch (error) {
+      console.error('[Checkpoint] Service - Exception checking for any checkpoint:', error);
+      return null;
+    }
+  }
+  
+  static async getAllPendingCheckpoints(): Promise<Phase2Checkpoint[]> {
+    try {
+      const { data, error } = await supabase
+        .from('phase2_checkpoints')
+        .select('*')
+        .eq('status', 'pending_review')
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        console.error('[Phase2Checkpoint] Error fetching checkpoints:', error);
+        return [];
+      }
+      
+      return data as Phase2Checkpoint[];
+    } catch (error) {
+      console.error('[Phase2Checkpoint] Exception fetching checkpoints:', error);
+      return [];
+    }
+  }
+  
+  static async approveCheckpoint(
+    checkpointId: string,
+    adminId: string,
+    notes?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Get checkpoint details
+      const { data: checkpoint, error: fetchError } = await supabase
+        .from('phase2_checkpoints')
+        .select('*')
+        .eq('id', checkpointId)
+        .single();
+      
+      if (fetchError || !checkpoint) {
+        return { success: false, error: 'Checkpoint not found' };
+      }
+      
+      // Update checkpoint status
+      const { error: updateError } = await supabase
+        .from('phase2_checkpoints')
+        .update({
+          status: 'approved',
+          reviewed_by: adminId,
+          reviewed_at: new Date().toISOString(),
+          notes: notes || null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', checkpointId);
+      
+      if (updateError) {
+        console.error('[Phase2Checkpoint] Error approving checkpoint:', updateError);
+        return { success: false, error: updateError.message };
+      }
+      
+      // Create transaction record for checkpoint approval (bonus will be added when user submits)
+      await this.createTransaction({
+        user_id: checkpoint.auth_user_id,
+        type: 'phase2_checkpoint_approved',
+        amount: checkpoint.bonus_amount,
+        description: `Phase 2 checkpoint approved at task ${checkpoint.task_number}. User must submit product to receive bonus.`,
+        status: 'completed',
+        metadata: { checkpoint_id: checkpointId, admin_id: adminId, pending_bonus: checkpoint.bonus_amount }
+      });
+      
+      console.log('[Phase2Checkpoint] Approved checkpoint', checkpointId, 'Waiting for user to submit product. Bonus:', checkpoint.bonus_amount);
+      return { success: true };
+    } catch (error) {
+      console.error('[Phase2Checkpoint] Exception approving checkpoint:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+  
+  static async rejectCheckpoint(
+    checkpointId: string,
+    adminId: string,
+    notes?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { error } = await supabase
+        .from('phase2_checkpoints')
+        .update({
+          status: 'rejected',
+          reviewed_by: adminId,
+          reviewed_at: new Date().toISOString(),
+          notes: notes || null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', checkpointId);
+      
+      if (error) {
+        console.error('[Phase2Checkpoint] Error rejecting checkpoint:', error);
+        return { success: false, error: error.message };
+      }
+      
+      console.log('[Phase2Checkpoint] Rejected checkpoint', checkpointId);
+      return { success: true };
+    } catch (error) {
+      console.error('[Phase2Checkpoint] Exception rejecting checkpoint:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+  
+  static async submitCheckpointProduct(
+    authUserId: string,
+    checkpointId: string
+  ): Promise<{ success: boolean; bonusAmount?: number; oldBalance?: number; newBalance?: number; nextTaskNumber?: number; error?: string }> {
+    console.log('[Checkpoint Submit] === STARTING SUBMISSION ===');
+    console.log('[Checkpoint Submit] authUserId:', authUserId);
+    console.log('[Checkpoint Submit] checkpointId:', checkpointId);
+    
+    try {
+      // STEP 1: Fetch checkpoint
+      console.log('[Checkpoint Submit] [STEP 1] BEFORE fetching checkpoint');
+      const { data: checkpoint, error: fetchError } = await supabase
+        .from('phase2_checkpoints')
+        .select('*')
+        .eq('id', checkpointId)
+        .eq('auth_user_id', authUserId)
+        .single();
+      console.log('[Checkpoint Submit] [STEP 1] AFTER fetching checkpoint');
+      
+      if (fetchError) {
+        console.error('[Checkpoint Submit] [STEP 1] ERROR fetching checkpoint:', fetchError);
+        return { success: false, error: 'Checkpoint not found: ' + fetchError.message };
+      }
+      
+      if (!checkpoint) {
+        console.error('[Checkpoint Submit] [STEP 1] ERROR: No checkpoint data returned');
+        return { success: false, error: 'Checkpoint not found' };
+      }
+      
+      console.log('[Checkpoint Submit] [STEP 1] checkpoint found:', checkpoint.id);
+      console.log('[Checkpoint Submit] [STEP 1] checkpoint status:', checkpoint.status);
+      console.log('[Checkpoint Submit] [STEP 1] checkpoint bonus_amount:', checkpoint.bonus_amount);
+      
+      // Prevent duplicate bonus payment - check if already processed
+      if (checkpoint.status === 'completed' || checkpoint.status === 'bonus_paid' || checkpoint.status === 'submitted') {
+        console.log('[Checkpoint Submit] [STEP 1] Checkpoint already processed. Status:', checkpoint.status);
+        console.log('[Checkpoint Submit] [STEP 1] Returning success without adding bonus again');
+        // Return success so frontend can proceed, but don't add bonus again
+        // Get current task number for response
+        const { data: trainingAccount } = await supabase
+          .from('training_accounts')
+          .select('task_number')
+          .eq('auth_user_id', authUserId)
+          .single();
+        return { 
+          success: true, 
+          bonusAmount: 0,
+          nextTaskNumber: trainingAccount?.task_number || checkpoint.task_number + 1,
+          message: 'Checkpoint bonus was already claimed. Continuing with next task.'
+        };
+      }
+      
+      if (checkpoint.status !== 'approved') {
+        console.error('[Checkpoint Submit] [STEP 1] ERROR: Checkpoint not approved. Status:', checkpoint.status);
+        return { success: false, error: 'Checkpoint must be approved before submitting' };
+      }
+      
+      // STEP 2: Fetch training account
+      console.log('[Checkpoint Submit] [STEP 2] BEFORE fetching training account');
+      const { data: trainingAccount, error: trainingError } = await supabase
+        .from('training_accounts')
+        .select('*')
+        .eq('auth_user_id', authUserId)
+        .single();
+      console.log('[Checkpoint Submit] [STEP 2] AFTER fetching training account');
+      
+      if (trainingError) {
+        console.error('[Checkpoint Submit] [STEP 2] ERROR fetching training account:', trainingError);
+        return { success: false, error: 'Training account error: ' + trainingError.message };
+      }
+      
+      if (!trainingAccount) {
+        console.error('[Checkpoint Submit] [STEP 2] ERROR: No training account found');
+        return { success: false, error: 'Training account not found' };
+      }
+      
+      // RECOVERY: Check if bonus was already paid (from previous failed attempt)
+      // This handles the case where balance was updated but checkpoint status wasn't
+      const { data: existingTransaction } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', authUserId)
+        .eq('type', 'phase2_checkpoint_bonus')
+        .eq('metadata->>checkpoint_id', checkpointId)
+        .maybeSingle();
+      
+      if (existingTransaction) {
+        console.log('[Checkpoint Submit] [RECOVERY] Found existing bonus transaction:', existingTransaction.id);
+        console.log('[Checkpoint Submit] [RECOVERY] Bonus was already paid, just need to complete checkpoint');
+        
+        // Just update checkpoint status to completed (no bonus added this time)
+        const { error: updateError } = await supabase
+          .from('phase2_checkpoints')
+          .update({ status: 'completed' })
+          .eq('id', checkpointId);
+        
+        if (updateError) {
+          console.error('[Checkpoint Submit] [RECOVERY] Failed to update checkpoint:', updateError);
+          return { success: false, error: 'Failed to complete checkpoint. Please refresh and try again.' };
+        }
+        
+        // Also advance task_number if it hasn't been advanced yet
+        const expectedNextTask = checkpoint.task_number + 1;
+        let finalTaskNumber = trainingAccount.task_number;
+        
+        if (trainingAccount.task_number < expectedNextTask) {
+          console.log('[Checkpoint Submit] [RECOVERY] Advancing task_number from', trainingAccount.task_number, 'to', expectedNextTask);
+          const { error: taskUpdateError } = await supabase
+            .from('training_accounts')
+            .update({ task_number: expectedNextTask })
+            .eq('auth_user_id', authUserId);
+          
+          if (!taskUpdateError) {
+            finalTaskNumber = expectedNextTask;
+          }
+        }
+        
+        console.log('[Checkpoint Submit] [RECOVERY] Checkpoint marked as completed');
+        return {
+          success: true,
+          bonusAmount: 0,
+          nextTaskNumber: finalTaskNumber,
+          message: 'Checkpoint completed. Continuing with next task.'
+        };
+      }
+      
+      console.log('[Checkpoint Submit] [STEP 2] training account found');
+      console.log('[Checkpoint Submit] [STEP 2] current amount:', trainingAccount.amount);
+      console.log('[Checkpoint Submit] [STEP 2] current task_number:', trainingAccount.task_number);
+      
+      // Calculate values
+      const bonusAmount = checkpoint.bonus_amount || 0;
+      const oldBalance = trainingAccount.amount || 0;
+      const newBalance = oldBalance + bonusAmount;
+      const currentTaskNumber = trainingAccount.task_number || 1;
+      const nextTaskNumber = currentTaskNumber + 1;
+      
+      console.log('[Checkpoint Submit] calculated values:');
+      console.log('[Checkpoint Submit]   old balance:', oldBalance);
+      console.log('[Checkpoint Submit]   bonus amount:', bonusAmount);
+      console.log('[Checkpoint Submit]   new balance:', newBalance);
+      console.log('[Checkpoint Submit]   current task:', currentTaskNumber);
+      console.log('[Checkpoint Submit]   next task:', nextTaskNumber);
+      
+      // STEP 3: Update training account (balance + task_number)
+      console.log('[Checkpoint Submit] [STEP 3] BEFORE updating training account');
+      const { data: updatedAccount, error: amountError } = await supabase
+        .from('training_accounts')
+        .update({ 
+          amount: newBalance,
+          task_number: nextTaskNumber
+        })
+        .eq('auth_user_id', authUserId)
+        .select();
+      console.log('[Checkpoint Submit] [STEP 3] AFTER updating training account');
+      
+      if (amountError) {
+        console.error('[Checkpoint Submit] [STEP 3] ERROR updating training account:', amountError);
+        return { success: false, error: 'Failed to update balance: ' + amountError.message };
+      }
+      
+      console.log('[Checkpoint Submit] [STEP 3] training account updated successfully');
+      console.log('[Checkpoint Submit] [STEP 3] updated data:', updatedAccount);
+      
+      // STEP 4: Update checkpoint to completed (CRITICAL - must succeed)
+      // Only update status column which definitely exists in the table
+      // Do NOT use completed_at or updated_at as they may not exist
+      console.log('[Checkpoint Submit] [STEP 4] BEFORE updating checkpoint status');
+      const { data: updatedCheckpoint, error: updateError } = await supabase
+        .from('phase2_checkpoints')
+        .update({
+          status: 'completed'
+        })
+        .eq('id', checkpointId)
+        .select();
+      console.log('[Checkpoint Submit] [STEP 4] AFTER updating checkpoint status');
+      
+      if (updateError) {
+        console.error('[Checkpoint Submit] [STEP 4] ERROR updating checkpoint:', updateError);
+        // CRITICAL: If checkpoint update fails, we must return error to prevent duplicate bonus
+        // The balance was already updated in STEP 3, so we can't easily rollback
+        // But we must tell the frontend it failed so user can retry
+        return { 
+          success: false, 
+          error: 'Checkpoint status update failed. Please refresh and try again. If this persists, contact support.' 
+        };
+      }
+      
+      console.log('[Checkpoint Submit] [STEP 4] checkpoint updated to completed');
+      console.log('[Checkpoint Submit] [STEP 4] updated data:', updatedCheckpoint);
+      
+      // STEP 5: Create transaction record
+      console.log('[Checkpoint Submit] [STEP 5] BEFORE creating transaction');
+      try {
+        const transactionResult = await this.createTransaction({
+          user_id: authUserId,
+          type: 'phase2_checkpoint_bonus',
+          amount: bonusAmount,
+          description: '6x premium checkpoint bonus',
+          status: 'completed',
+          metadata: { 
+            checkpoint_id: checkpointId, 
+            old_amount: oldBalance, 
+            new_amount: newBalance,
+            bonus_amount: bonusAmount,
+            old_task: currentTaskNumber,
+            new_task: nextTaskNumber
+          }
+        });
+        console.log('[Checkpoint Submit] [STEP 5] AFTER creating transaction:', transactionResult);
+      } catch (transactionError) {
+        console.error('[Checkpoint Submit] [STEP 5] ERROR creating transaction:', transactionError);
+        // Don't fail the whole operation if transaction fails
+      }
+      
+      console.log('[Checkpoint Submit] === SUBMISSION COMPLETED SUCCESSFULLY ===');
+      console.log('[Checkpoint Submit] Returning:', { success: true, bonusAmount, oldBalance, newBalance, nextTaskNumber });
+      
+      return { success: true, bonusAmount, oldBalance, newBalance, nextTaskNumber };
+    } catch (error) {
+      console.error('[Checkpoint Submit] === UNEXPECTED EXCEPTION ===');
+      console.error('[Checkpoint Submit] Error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+  
+  // Update checkpoint status (for recovery purposes)
+  static async updateCheckpointStatus(
+    checkpointId: string, 
+    status: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { error } = await supabase
+        .from('phase2_checkpoints')
+        .update({ status })
+        .eq('id', checkpointId);
+      
+      if (error) {
+        console.error('[updateCheckpointStatus] Error:', error);
+        return { success: false, error: error.message };
+      }
+      
+      return { success: true };
+    } catch (error) {
+      console.error('[updateCheckpointStatus] Exception:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+  
+  // ===========================================
+  // TRAINING COMPLETION TRANSFER (2% to personal account)
+  // ===========================================
+  
+  static async processTrainingCompletionTransfer(
+    trainingAuthUserId: string
+  ): Promise<{ success: boolean; transferAmount?: number; error?: string }> {
+    try {
+      console.log('[TrainingCompletion] Processing completion transfer for:', trainingAuthUserId);
+      
+      // Get training account details
+      const { data: trainingAccount, error: trainingError } = await supabase
+        .from('training_accounts')
+        .select('*')
+        .eq('auth_user_id', trainingAuthUserId)
+        .single();
+      
+      if (trainingError || !trainingAccount) {
+        console.error('[TrainingCompletion] Training account not found:', trainingError);
+        return { success: false, error: 'Training account not found' };
+      }
+      
+      // Verify completion criteria
+      const isPhase1Complete = trainingAccount.task_number > 45; // Phase 1 has 45 tasks
+      const isPhase2Complete = trainingAccount.completed === true; // completed flag for Phase 2
+      const currentBalance = trainingAccount.amount || 0;
+      const TARGET_BALANCE = 2431.20;
+      
+      console.log('[TrainingCompletion] Status:', {
+        phase1: isPhase1Complete,
+        phase2: isPhase2Complete,
+        balance: currentBalance,
+        target: TARGET_BALANCE
+      });
+      
+      // Check if both phases are complete
+      if (!isPhase1Complete || !isPhase2Complete) {
+        return { success: false, error: 'Both Phase 1 and Phase 2 must be completed' };
+      }
+      
+      // Check if balance is at target (allow small floating point tolerance)
+      if (Math.abs(currentBalance - TARGET_BALANCE) > 0.01) {
+        return { success: false, error: `Balance must be $${TARGET_BALANCE.toFixed(2)} before transfer. Current: $${currentBalance.toFixed(2)}` };
+      }
+      
+      // Calculate 2% transfer amount = $48.62
+      const TRANSFER_PERCENTAGE = 0.02;
+      const transferAmount = Math.round(TARGET_BALANCE * TRANSFER_PERCENTAGE * 100) / 100; // $48.62
+      const remainingBalance = TARGET_BALANCE - transferAmount; // $2382.58
+      
+      console.log('[TrainingCompletion] Calculated transfer:', {
+        transferAmount,
+        remainingBalance
+      });
+      
+      // Find linked personal account using referral_code
+      // The training account stores the linked user's ID in referred_by field
+      const linkedUserId = trainingAccount.referred_by;
+      
+      if (!linkedUserId) {
+        console.error('[TrainingCompletion] No linked personal account found. Training account has no referred_by value.');
+        return { success: false, error: 'No linked personal account found for this training account' };
+      }
+      
+      // Get linked personal account
+      const { data: personalAccount, error: personalError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', linkedUserId)
+        .single();
+      
+      if (personalError || !personalAccount) {
+        console.error('[TrainingCompletion] Linked personal account not found:', personalError);
+        return { success: false, error: 'Linked personal account not found' };
+      }
+      
+      console.log('[TrainingCompletion] Found linked personal account:', personalAccount.id, personalAccount.email);
+      
+      // Perform the transfer - Update training account balance (deduct transfer amount)
+      const { error: trainingUpdateError } = await supabase
+        .from('training_accounts')
+        .update({
+          amount: remainingBalance,
+          updated_at: new Date().toISOString()
+        })
+        .eq('auth_user_id', trainingAuthUserId);
+      
+      if (trainingUpdateError) {
+        console.error('[TrainingCompletion] Error updating training account:', trainingUpdateError);
+        return { success: false, error: trainingUpdateError.message };
+      }
+      
+      // Add transfer amount to personal account balance
+      const currentPersonalBalance = personalAccount.balance || 0;
+      const newPersonalBalance = currentPersonalBalance + transferAmount;
+      
+      const { error: personalUpdateError } = await supabase
+        .from('users')
+        .update({
+          balance: newPersonalBalance,
+          total_earned: (personalAccount.total_earned || 0) + transferAmount,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', linkedUserId);
+      
+      if (personalUpdateError) {
+        console.error('[TrainingCompletion] Error updating personal account:', personalUpdateError);
+        return { success: false, error: personalUpdateError.message };
+      }
+      
+      // Create transaction record for the transfer
+      await this.createTransaction({
+        user_id: trainingAuthUserId,
+        type: 'training_completion_transfer_out',
+        amount: -transferAmount,
+        description: `Training completion: 2% transfer ($${transferAmount.toFixed(2)}) to linked personal account`,
+        status: 'completed',
+        metadata: {
+          training_account_id: trainingAuthUserId,
+          personal_account_id: linkedUserId,
+          personal_email: personalAccount.email,
+          transfer_amount: transferAmount,
+          old_training_balance: TARGET_BALANCE,
+          new_training_balance: remainingBalance,
+          old_personal_balance: currentPersonalBalance,
+          new_personal_balance: newPersonalBalance
+        }
+      });
+      
+      // Create transaction record for personal account receiving the transfer
+      await this.createTransaction({
+        user_id: linkedUserId,
+        type: 'training_completion_transfer_in',
+        amount: transferAmount,
+        description: `Received $${transferAmount.toFixed(2)} from training account completion (2% of $${TARGET_BALANCE.toFixed(2)})`,
+        status: 'completed',
+        metadata: {
+          training_account_id: trainingAuthUserId,
+          training_email: trainingAccount.email,
+          transfer_amount: transferAmount
+        }
+      });
+      
+      console.log('[TrainingCompletion] Transfer completed successfully:', {
+        transferAmount,
+        trainingBalance: remainingBalance,
+        personalBalance: newPersonalBalance,
+        linkedAccount: personalAccount.email
+      });
+      
+      return { success: true, transferAmount };
+    } catch (error) {
+      console.error('[TrainingCompletion] Exception processing transfer:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  // ===========================================
+  // TRAINING SETTINGS (Admin-configurable)
+  // ===========================================
+
+  static async getTrainingSettings(): Promise<{
+    checkpoint_multiplier: number;
+    training_completion_percentage: number;
+    phase2_target_final_balance: number;
+    checkpoint_bonus_mode: string;
+  }> {
+    try {
+      const { data, error } = await supabase
+        .from('training_settings')
+        .select('*')
+        .eq('id', 'default')
+        .single();
+      
+      if (error) {
+        console.log('[TrainingSettings] No settings found, returning defaults');
+        return {
+          checkpoint_multiplier: 6,
+          training_completion_percentage: 2,
+          phase2_target_final_balance: 2431.20,
+          checkpoint_bonus_mode: 'dynamic'
+        };
+      }
+      
+      return {
+        checkpoint_multiplier: data.checkpoint_multiplier ?? 6,
+        training_completion_percentage: data.training_completion_percentage ?? 2,
+        phase2_target_final_balance: data.phase2_target_final_balance ?? 2431.20,
+        checkpoint_bonus_mode: data.checkpoint_bonus_mode ?? 'dynamic'
+      };
+    } catch (error) {
+      console.error('[TrainingSettings] Error fetching settings:', error);
+      return {
+        checkpoint_multiplier: 6,
+        training_completion_percentage: 2,
+        phase2_target_final_balance: 2431.20,
+        checkpoint_bonus_mode: 'dynamic'
+      };
+    }
+  }
+
+  static async updateTrainingSettings(settings: {
+    checkpoint_multiplier?: number;
+    training_completion_percentage?: number;
+    phase2_target_final_balance?: number;
+    checkpoint_bonus_mode?: string;
+  }): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { error } = await supabase
+        .from('training_settings')
+        .upsert({
+          id: 'default',
+          ...settings,
+          updated_at: new Date().toISOString()
+        });
+      
+      if (error) {
+        console.error('[TrainingSettings] Error updating settings:', error);
+        return { success: false, error: error.message };
+      }
+      
+      console.log('[TrainingSettings] Settings updated successfully:', settings);
+      return { success: true };
+    } catch (error) {
+      console.error('[TrainingSettings] Exception updating settings:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  // ===========================================
+  // CHAT ATTACHMENTS - File Upload/Download
+  // ===========================================
+
+  static async uploadChatAttachment(
+    file: File,
+    userId: string
+  ): Promise<{ 
+    success: boolean; 
+    url?: string; 
+    path?: string;
+    error?: string;
+    attachmentType?: string;
+    attachmentName?: string;
+    attachmentSize?: number;
+  }> {
+    try {
+      // Validate file type
+      const allowedTypes = [
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/webp',
+        'application/pdf'
+      ];
+      
+      if (!allowedTypes.includes(file.type)) {
+        return { 
+          success: false, 
+          error: 'Invalid file type. Allowed: JPG, JPEG, PNG, WEBP, PDF' 
+        };
+      }
+
+      // Validate file size (10MB max)
+      const maxSize = 10 * 1024 * 1024; // 10MB in bytes
+      if (file.size > maxSize) {
+        return { 
+          success: false, 
+          error: 'File too large. Maximum size is 10MB' 
+        };
+      }
+
+      // Generate unique filename
+      const timestamp = Date.now();
+      const randomString = Math.random().toString(36).substring(2, 8);
+      const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const filePath = `${userId}/${timestamp}-${randomString}-${sanitizedName}`;
+
+      console.log('[ChatAttachment] Uploading file:', filePath, 'Type:', file.type, 'Size:', file.size);
+
+      // Upload to Supabase Storage
+      const { data, error } = await supabase
+        .storage
+        .from('chat-attachments')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (error) {
+        console.error('[ChatAttachment] Upload error:', error);
+        return { success: false, error: error.message };
+      }
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase
+        .storage
+        .from('chat-attachments')
+        .getPublicUrl(filePath);
+
+      console.log('[ChatAttachment] Upload successful:', publicUrl);
+
+      return {
+        success: true,
+        url: publicUrl,
+        path: filePath,
+        attachmentType: file.type,
+        attachmentName: file.name,
+        attachmentSize: file.size
+      };
+    } catch (error) {
+      console.error('[ChatAttachment] Exception:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Upload failed' 
+      };
+    }
+  }
+
+  static async deleteChatAttachment(
+    filePath: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { error } = await supabase
+        .storage
+        .from('chat-attachments')
+        .remove([filePath]);
+
+      if (error) {
+        console.error('[ChatAttachment] Delete error:', error);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('[ChatAttachment] Delete exception:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Delete failed' 
+      };
+    }
+  }
+
+  static isImageAttachment(type: string): boolean {
+    return type.startsWith('image/');
+  }
+
+  static formatFileSize(bytes: number): string {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 }
 

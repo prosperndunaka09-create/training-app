@@ -32,9 +32,9 @@ const Dashboard: React.FC = () => {
   const clearCombinationOrder = () => {
     console.log('Clear combination order');
   };
-  const upgradeAccount = () => {
-    console.log('Upgrade account');
-  };
+  const upgradeAccount = (level?: number) => {
+  console.log('Upgrade account', level);
+};
 
   // Load data ONCE when user is available - no retry loop
   useEffect(() => {
@@ -69,6 +69,13 @@ const Dashboard: React.FC = () => {
         if (user.has_pending_order && user.is_negative_balance) {
           setShowCombinationModal(true);
         }
+        
+        console.log('[Dashboard] Training account state:', {
+          task_number: user.task_number,
+          completedCount: Math.max(0, (user.task_number || 1) - 1),
+          balance: user.balance,
+          totalEarned: Math.max(0, (user.balance || 1100) - 1100)
+        });
       }
     } catch (err: any) {
       console.error('Error in user effect:', err);
@@ -79,12 +86,28 @@ const Dashboard: React.FC = () => {
   const safeWallets = wallets || [];
   const safeTransactions = transactions || [];
   
-  const completedCount = safeTasks.filter(t => t.status === 'completed').length;
+  // For training accounts, use Supabase task_number as source of truth
+  // completedTasks = task_number - 1 (task_number is the next task to complete)
+  const trainingTotalTasks = user?.total_tasks || 45;
+  const trainingCompletedCount = isTraining ? Math.max(0, (user?.task_number || 1) - 1) : 0;
+  
+  // Use Supabase-derived count for training, tasks array for personal
+  const completedCount = isTraining ? trainingCompletedCount : safeTasks.filter(t => t.status === 'completed').length;
+  
   const nextTask = safeTasks.find(t => t.status === 'pending');
-  const totalReward = safeTasks.filter(t => t.status === 'completed').reduce((sum, t) => sum + (t.reward || 0), 0);
-  const progress = safeTasks.length > 0 ? (completedCount / safeTasks.length) * 100 : 0;
+  
+  // Use user.total_earned from database as the single source of truth
+  const totalReward = user?.total_earned || 0;
+  
+  const progress = safeTasks.length > 0 ? (completedCount / (isTraining ? trainingTotalTasks : safeTasks.length)) * 100 : 0;
   const primaryWallet = safeWallets.find(w => w.is_primary);
-  const allTasksComplete = isTraining ? completedCount === 45 : completedCount === safeTasks.length;
+  const displayRole =
+    user?.account_type === 'admin'
+      ? 'Admin'
+      : user?.vip_level
+        ? `VIP${user.vip_level} Member`
+        : 'Member';
+  const allTasksComplete = isTraining ? completedCount === trainingTotalTasks : completedCount === safeTasks.length;
   const pendingWithdrawals = safeTransactions.filter(t => t.type === 'withdrawal' && t.status === 'pending');
 
   // Show loading state while data is being fetched
@@ -159,9 +182,11 @@ const Dashboard: React.FC = () => {
                  `Welcome back, ${user?.display_name || 'User'}!`}
               </h1>
               <p className="text-sm text-gray-400">
-                {isTraining ? 'Training Account' :
-                 user?.user_status === 'waiting_for_training' ? 'Your training account is being prepared by admin. Please wait for your login details through official Telegram support.' :
-                 user?.account_type === 'personal' ? `VIP${user?.vip_level || 1} Member` : 'Member'}
+                {isTraining
+  ? 'Training Account'
+  : user?.user_status === 'waiting_for_training'
+    ? 'Your training account is being prepared by admin. Please wait...'
+    : displayRole}
               </p>
             </div>
           </div>
@@ -169,7 +194,7 @@ const Dashboard: React.FC = () => {
             {isTraining
               ? trainingComplete
                 ? 'Training completed! You can now upgrade to a personal account.'
-                : `Complete ${45 - completedCount} more tasks to finish training.`
+                : `Complete ${trainingTotalTasks - completedCount} more tasks to finish training.`
               : allTasksComplete
                 ? 'All tasks complete! You can now withdraw your earnings.'
                 : `You have ${safeTasks.length - completedCount} tasks remaining in your VIP${user?.vip_level || 1} set.`}
@@ -225,7 +250,7 @@ const Dashboard: React.FC = () => {
             <Target size={14} className="text-indigo-400" />
           </div>
           <p className="text-xs text-gray-500 font-medium">Tasks</p>
-          <p className="text-2xl font-bold text-white">{completedCount}<span className="text-sm text-gray-500 font-normal">/{isTraining ? 45 : safeTasks.length}</span></p>
+          <p className="text-2xl font-bold text-white">{completedCount}<span className="text-sm text-gray-500 font-normal">/{isTraining ? trainingTotalTasks : safeTasks.length}</span></p>
         </div>
 
         <div className="p-5 bg-white/[0.03] border border-white/[0.06] rounded-2xl hover:border-indigo-500/20 transition-all group cursor-pointer" onClick={() => safeSetActiveTab('profile')}>
@@ -236,7 +261,7 @@ const Dashboard: React.FC = () => {
             <TrendingUp size={14} className="text-purple-400" />
           </div>
           <p className="text-xs text-gray-500 font-medium">Total Earned</p>
-          <p className="text-2xl font-bold text-white">${walletState.total_earned.toFixed(2)}</p>
+          <p className="text-2xl font-bold text-white">${totalReward.toFixed(2)}</p>
         </div>
 
         <div className="p-5 bg-white/[0.03] border border-white/[0.06] rounded-2xl hover:border-indigo-500/20 transition-all group">
@@ -291,7 +316,7 @@ const Dashboard: React.FC = () => {
 
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-400">{completedCount} of {isTraining ? 45 : safeTasks.length} tasks completed</span>
+            <span className="text-sm text-gray-400">{completedCount} of {isTraining ? trainingTotalTasks : safeTasks.length} tasks completed</span>
             <span className="text-sm font-bold text-indigo-400">{progress.toFixed(0)}%</span>
           </div>
           <div className="h-3 bg-white/5 rounded-full overflow-hidden">
@@ -306,7 +331,17 @@ const Dashboard: React.FC = () => {
 
         {/* Mini Task Preview */}
         <div className="flex flex-wrap gap-1.5 mt-4">
-          {(safeTasks.length > 0 ? safeTasks : Array.from({ length: isTraining ? 45 : 35 }, (_, i) => ({ task_number: i + 1, status: i === 0 ? 'pending' : 'locked' }))).map((task: any) => (
+          {(isTraining 
+            ? Array.from({ length: trainingTotalTasks }, (_, i) => {
+                const taskNum = i + 1;
+                const currentTaskNum = user?.task_number || 1;
+                let status = 'locked';
+                if (taskNum < currentTaskNum) status = 'completed';
+                else if (taskNum === currentTaskNum) status = 'pending';
+                return { task_number: taskNum, status };
+              })
+            : (safeTasks.length > 0 ? safeTasks : Array.from({ length: 35 }, (_, i) => ({ task_number: i + 1, status: i === 0 ? 'pending' : 'locked' })))
+          ).map((task: any) => (
             <div
               key={task.task_number}
               className={`w-6 h-6 rounded-md flex items-center justify-center text-[9px] font-bold ${
@@ -449,10 +484,13 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
                 <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                  w.status === 'completed' ? 'bg-emerald-500/15 text-emerald-400' :
-                  w.status === 'processing' ? 'bg-blue-500/15 text-blue-400' :
-                  w.status === 'rejected' ? 'bg-red-500/15 text-red-400' :
-                  'bg-amber-500/15 text-amber-400'
+                 w.status === 'completed'
+  ? 'bg-emerald-500/15 text-emerald-400'
+  : w.status === 'pending'
+  ? 'bg-blue-500/15 text-blue-400'
+  : w.status === 'failed'
+  ? 'bg-red-500/15 text-red-400'
+  : 'bg-amber-500/15 text-amber-400'
                 }`}>
                 </span>
               </div>

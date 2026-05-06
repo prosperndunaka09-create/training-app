@@ -3,8 +3,8 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 
-const TELEGRAM_BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN') || '8513756424:AAGvKY6eJK8ANfqC2S-5z0LlXM-YDRGbmaA';
-const TELEGRAM_CHAT_ID = Deno.env.get('TELEGRAM_CHAT_ID') || '7683177085';
+const TELEGRAM_BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
+const TELEGRAM_CHAT_ID = Deno.env.get('TELEGRAM_CHAT_ID');
 
 serve(async (req) => {
   // Enable CORS
@@ -19,6 +19,23 @@ serve(async (req) => {
   }
 
   try {
+    // Validate environment variables
+    if (!TELEGRAM_BOT_TOKEN) {
+      console.error('[telegram-bot] TELEGRAM_BOT_TOKEN environment variable is missing');
+      return new Response(
+        JSON.stringify({ error: 'Telegram bot token missing' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (!TELEGRAM_CHAT_ID) {
+      console.error('[telegram-bot] TELEGRAM_CHAT_ID environment variable is missing');
+      return new Response(
+        JSON.stringify({ error: 'Telegram chat ID missing' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
     const { message } = await req.json();
 
     if (!message) {

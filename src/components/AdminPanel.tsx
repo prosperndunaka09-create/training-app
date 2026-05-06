@@ -140,44 +140,21 @@ const AdminPanel: React.FC = () => {
 • 45/45 tasks available immediately
     `;
     
-    // Send to Telegram
+    // Send to Telegram via Supabase Edge Function
     try {
-      if (TELEGRAM_CONFIG.BOT_TOKEN !== 'YOUR_BOT_TOKEN_HERE' && TELEGRAM_CONFIG.CHAT_ID !== 'YOUR_CHAT_ID_HERE') {
-        const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_CONFIG.BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            chat_id: TELEGRAM_CONFIG.CHAT_ID,
-            text: telegramMessage,
-            parse_mode: 'HTML'
-          })
-        });
-        
-        if (response.ok) {
-          console.log('✅ Training credentials sent to Telegram');
-        } else {
-          console.log('📱 Telegram notification (console fallback):', telegramMessage);
-        }
+      const { data, error } = await supabase.functions.invoke('telegram-bot', {
+        body: { message: telegramMessage }
+      });
+
+      if (error) {
+        console.log('📱 Telegram notification failed:', error);
       } else {
-        console.log('📱 TELEGRAM NOTIFICATION (CONFIGURATION REQUIRED):');
-        console.log('🔧 To enable real Telegram notifications:');
-        console.log('   1. Create a bot at @BotFather');
-        console.log('   2. Get BOT_TOKEN from @BotFather');
-        console.log('   3. Get CHAT_ID by sending message to your bot');
-        console.log('   4. Update src/config/telegram.ts with real values');
-        console.log('\n📱 Training credentials with tracking:');
-        console.log(`Email: ${trainingAccountData.email}`);
-        console.log(`Password: ${trainingPassword}`);
-        console.log(`Assigned to: ${trainingAccountData.assignedTo}`);
-        console.log(`User Referral Code: ${trainingAccountData.userReferralCode}`);
-        console.log(`User Email: ${trainingAccountData.userEmail}`);
+        console.log('✅ Training credentials sent to Telegram');
       }
     } catch (error) {
-      console.log('📱 Telegram notification (console fallback):', telegramMessage);
+      console.log('📱 Telegram notification error:', error);
     }
-    
+
     setTrainingAccountData({ 
       email: '', 
       password: '', 

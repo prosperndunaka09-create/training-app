@@ -17,6 +17,7 @@ export interface AdminUser {
   account_type: 'personal' | 'training';
   training_phase?: 1 | 2;
   training_progress?: number;
+  task_number?: number;
   trigger_task_number?: 19 | 24 | 31;
   has_pending_order?: boolean;
   pending_amount?: number;

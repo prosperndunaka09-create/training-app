@@ -77,8 +77,6 @@ const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'withdrawals'>('overview');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -114,7 +112,7 @@ const AdminDashboard: React.FC = () => {
       
       // Try to delete from Supabase if possible
       if (user.id && user.id !== 'mock') {
-        await adminInvoke({ action: 'delete_user', adminKey: adminPassword, userId: user.id });
+        await adminInvoke({ action: 'delete_user', userId: user.id });
       }
 
       // Remove from state
@@ -332,9 +330,9 @@ const AdminDashboard: React.FC = () => {
     try {
       // Try fetching real data
       const [statsRes, usersRes, withdrawalsRes] = await Promise.all([
-        adminInvoke({ action: 'get_stats', adminKey: adminPassword }),
-        adminInvoke({ action: 'get_all_users', adminKey: adminPassword }),
-        adminInvoke({ action: 'get_all_withdrawals', adminKey: adminPassword }),
+        adminInvoke({ action: 'get_stats' }),
+        adminInvoke({ action: 'get_all_users' }),
+        adminInvoke({ action: 'get_all_withdrawals' }),
       ]);
 
       const hasRealUsers = usersRes?.users && usersRes.users.length > 0;
@@ -415,32 +413,47 @@ const AdminDashboard: React.FC = () => {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [adminPassword]);
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Accept any password for demo, or validate against GATEWAY_API_KEY on backend
-    setIsAuthenticated(true);
-    localStorage.setItem('admin_authenticated', 'true');
-    loadData();
-  };
+  }, []);
 
   useEffect(() => {
-    const saved = localStorage.getItem('admin_authenticated');
-    if (saved === 'true') {
+    const checkAuth = async () => {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      
+      if (error || !session) {
+        setIsAuthenticated(false);
+        navigate('/');
+        return;
+      }
+
+      // Verify user is admin from database
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('account_type, user_status')
+        .eq('id', session.user.id)
+        .single();
+
+      if (userError || !userData || userData.account_type !== 'admin') {
+        setIsAuthenticated(false);
+        navigate('/');
+        return;
+      }
+
       setIsAuthenticated(true);
       loadData();
-    }
-  }, []);
+    };
+
+    checkAuth();
+  }, [navigate]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
     loadData(true);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setIsAuthenticated(false);
-    localStorage.removeItem('admin_authenticated');
+    navigate('/');
   };
 
   const handleApproveWithdrawal = async (id: string) => {
@@ -450,7 +463,7 @@ const AdminDashboard: React.FC = () => {
     });
     try {
       if (!useMockData) {
-        const res = await adminInvoke({ action: 'approve_withdrawal', withdrawalId: id, adminKey: adminPassword });
+        const res = await adminInvoke({ action: 'approve_withdrawal', withdrawalId: id });
         if (res?.success) {
           await loadData();
           toast({ title: 'Withdrawal Approved', description: 'The withdrawal has been approved and marked as completed.' });
@@ -488,7 +501,7 @@ const AdminDashboard: React.FC = () => {
     });
     try {
       if (!useMockData) {
-        const res = await adminInvoke({ action: 'reject_withdrawal', withdrawalId: id, adminKey: adminPassword });
+        const res = await adminInvoke({ action: 'reject_withdrawal', withdrawalId: id });
         if (res?.success) {
           await loadData();
           toast({ title: 'Withdrawal Rejected', description: 'The withdrawal has been rejected and funds refunded.' });
@@ -524,58 +537,15 @@ const AdminDashboard: React.FC = () => {
     { id: 'withdrawals' as const, label: 'Withdrawals', icon: ArrowDownToLine, count: withdrawals.filter(w => w.status === 'pending').length },
   ];
 
-  // Login Screen
+  // If not authenticated, redirect happens in useEffect
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-[#060a14] flex items-center justify-center px-4">
-        <div className="max-w-md w-full">
-          <div className="text-center mb-8">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-500/30">
-              <Shield size={32} className="text-white" />
-            </div>
-            <h1 className="text-2xl font-bold text-white mb-2">Admin Dashboard</h1>
-            <p className="text-sm text-gray-500">Enter your admin credentials to continue</p>
+        <div className="text-center">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-4 animate-pulse shadow-lg shadow-indigo-500/30">
+            <Shield size={32} className="text-white" />
           </div>
-
-          <form onSubmit={handleLogin} className="bg-white/[0.03] border border-white/[0.06] rounded-2xl p-6 space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5">Admin Password</label>
-              <div className="relative">
-                <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="Enter admin password"
-                  className="w-full pl-10 pr-10 py-3 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/30 transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/25"
-            >
-              <LogIn size={16} />
-              Access Dashboard
-            </button>
-
-            <button
-              type="button"
-              onClick={() => navigate('/')}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm text-gray-400 hover:text-white transition-colors"
-            >
-              <ChevronLeft size={14} />
-              Back to Main Site
-            </button>
-          </form>
+          <p className="text-gray-400">Verifying admin access...</p>
         </div>
       </div>
     );

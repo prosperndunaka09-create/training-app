@@ -34,6 +34,8 @@ const ProductCatalogManager: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const itemsPerPage = 10;
 
   // Form state
@@ -45,16 +47,43 @@ const ProductCatalogManager: React.FC = () => {
     image: ''
   });
 
-  // Load products on mount
+  // Load products on mount and subscribe to realtime changes
   useEffect(() => {
     loadProducts();
+
+    // Subscribe to realtime changes
+    ProductCatalogService.subscribeToTrainingProducts((products) => {
+      console.log('[ProductCatalogManager] Training products updated via realtime:', products.length);
+      setTrainingProducts(products);
+    });
+
+    ProductCatalogService.subscribeToPersonalProducts((products) => {
+      console.log('[ProductCatalogManager] Personal products updated via realtime:', products.length);
+      setPersonalProducts(products);
+    });
+
+    // Cleanup subscriptions on unmount
+    return () => {
+      ProductCatalogService.unsubscribeFromTrainingProducts();
+      ProductCatalogService.unsubscribeFromPersonalProducts();
+    };
   }, []);
 
-  const loadProducts = () => {
-    const training = ProductCatalogService.getTrainingProducts();
-    const personal = ProductCatalogService.getPersonalProducts();
-    setTrainingProducts(training);
-    setPersonalProducts(personal);
+  const loadProducts = async () => {
+    setIsLoading(true);
+    try {
+      const [training, personal] = await Promise.all([
+        ProductCatalogService.getTrainingProducts(),
+        ProductCatalogService.getPersonalProducts()
+      ]);
+      setTrainingProducts(training);
+      setPersonalProducts(personal);
+    } catch (error) {
+      console.error('[ProductCatalogManager] Error loading products:', error);
+      toast.error('Failed to load products from Supabase');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const currentProducts = activeTab === 'training' ? trainingProducts : personalProducts;
@@ -99,61 +128,119 @@ const ProductCatalogManager: React.FC = () => {
     });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.name || !formData.brand || !formData.image) {
       toast.error('Please fill in all required fields');
       return;
     }
 
-    if (isAddingNew) {
-      if (activeTab === 'training') {
-        ProductCatalogService.addTrainingProduct(formData as Omit<Product, 'id'>);
-        toast.success('Training product added successfully');
-      } else {
-        ProductCatalogService.addPersonalProduct(formData as Omit<Product, 'id'>);
-        toast.success('Personal product added successfully');
+    setIsSaving(true);
+    try {
+      let result;
+      if (isAddingNew) {
+        if (activeTab === 'training') {
+          result = await ProductCatalogService.addTrainingProduct(formData as Omit<Product, 'id'>);
+          if (result.success) {
+            toast.success('Training product added successfully to Supabase');
+            if (result.products) setTrainingProducts(result.products);
+          } else {
+            toast.error(result.error || 'Failed to add training product');
+          }
+        } else {
+          result = await ProductCatalogService.addPersonalProduct(formData as Omit<Product, 'id'>);
+          if (result.success) {
+            toast.success('Personal product added successfully to Supabase');
+            if (result.products) setPersonalProducts(result.products);
+          } else {
+            toast.error(result.error || 'Failed to add personal product');
+          }
+        }
+      } else if (editingProduct) {
+        if (activeTab === 'training') {
+          result = await ProductCatalogService.updateTrainingProduct(editingProduct.id, formData);
+          if (result.success) {
+            toast.success('Training product updated in Supabase');
+            console.log('[ProductCatalogManager] Product updated successfully:', editingProduct.id);
+            if (result.products) setTrainingProducts(result.products);
+          } else {
+            toast.error(result.error || 'Failed to update training product');
+            console.error('[ProductCatalogManager] Product update failed:', result.error);
+          }
+        } else {
+          result = await ProductCatalogService.updatePersonalProduct(editingProduct.id, formData);
+          if (result.success) {
+            toast.success('Personal product updated in Supabase');
+            if (result.products) setPersonalProducts(result.products);
+          } else {
+            toast.error(result.error || 'Failed to update personal product');
+          }
+        }
       }
-    } else if (editingProduct) {
-      if (activeTab === 'training') {
-        ProductCatalogService.updateTrainingProduct(editingProduct.id, formData);
-        toast.success('Training product updated');
-      } else {
-        ProductCatalogService.updatePersonalProduct(editingProduct.id, formData);
-        toast.success('Personal product updated');
-      }
-    }
 
-    loadProducts();
-    setEditingProduct(null);
-    setIsAddingNew(false);
+      setEditingProduct(null);
+      setIsAddingNew(false);
+    } catch (error) {
+      console.error('[ProductCatalogManager] Error saving product:', error);
+      toast.error('An unexpected error occurred');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this product?')) return;
 
-    if (activeTab === 'training') {
-      ProductCatalogService.deleteTrainingProduct(id);
-      toast.success('Training product deleted');
-    } else {
-      ProductCatalogService.deletePersonalProduct(id);
-      toast.success('Personal product deleted');
+    try {
+      let result;
+      if (activeTab === 'training') {
+        result = await ProductCatalogService.deleteTrainingProduct(id);
+        if (result.success) {
+          toast.success('Training product deleted from Supabase');
+          if (result.products) setTrainingProducts(result.products);
+        } else {
+          toast.error(result.error || 'Failed to delete training product');
+        }
+      } else {
+        result = await ProductCatalogService.deletePersonalProduct(id);
+        if (result.success) {
+          toast.success('Personal product deleted from Supabase');
+          if (result.products) setPersonalProducts(result.products);
+        } else {
+          toast.error(result.error || 'Failed to delete personal product');
+        }
+      }
+    } catch (error) {
+      console.error('[ProductCatalogManager] Error deleting product:', error);
+      toast.error('An unexpected error occurred');
     }
-
-    loadProducts();
   };
 
-  const handleReset = () => {
-    if (!confirm(`Reset all ${activeTab} products to defaults? This cannot be undone.`)) return;
+  const handleReset = async () => {
+    if (!confirm(`Reset all ${activeTab} products to defaults in Supabase? This cannot be undone.`)) return;
 
-    if (activeTab === 'training') {
-      ProductCatalogService.resetTrainingProducts();
-      toast.success('Training products reset to defaults');
-    } else {
-      ProductCatalogService.resetPersonalProducts();
-      toast.success('Personal products reset to defaults');
+    try {
+      let result;
+      if (activeTab === 'training') {
+        result = await ProductCatalogService.resetTrainingProducts();
+        if (result.success) {
+          toast.success('Training products reset to defaults in Supabase');
+          if (result.products) setTrainingProducts(result.products);
+        } else {
+          toast.error(result.error || 'Failed to reset training products');
+        }
+      } else {
+        result = await ProductCatalogService.resetPersonalProducts();
+        if (result.success) {
+          toast.success('Personal products reset to defaults in Supabase');
+          if (result.products) setPersonalProducts(result.products);
+        } else {
+          toast.error(result.error || 'Failed to reset personal products');
+        }
+      }
+    } catch (error) {
+      console.error('[ProductCatalogManager] Error resetting products:', error);
+      toast.error('An unexpected error occurred');
     }
-
-    loadProducts();
   };
 
   const handleCancel = () => {
@@ -564,8 +651,8 @@ const ProductCatalogManager: React.FC = () => {
             <ul className="text-sm text-amber-400/80 space-y-1">
               <li>• Training products are used for training accounts (45 products, 1% commission - same as VIP2)</li>
               <li>• Personal products are used for VIP1 accounts (35 products, 0.5% commission) and VIP2 (1% commission)</li>
-              <li>• Changes are saved to localStorage and take effect immediately</li>
-              <li>• Use "Reset Defaults" to restore original product catalogs</li>
+              <li>• Changes are saved to Supabase and sync in real-time across all users</li>
+              <li>• Use "Reset Defaults" to restore original product catalogs in Supabase</li>
             </ul>
           </div>
         </div>

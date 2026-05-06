@@ -36,7 +36,9 @@ function jsonResponse(data: unknown, status: number, origin: string | null) {
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const supabase = createClient(supabaseUrl, supabaseKey)
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey)
 
 const generateId = () => crypto.randomUUID()
 const generatePassword = () => Math.floor(100000 + Math.random() * 900000).toString()
@@ -143,328 +145,120 @@ async function handleGetUsers(origin: string | null) {
 }
 
 async function handleCreateTrainingAccount(body: any, origin: string | null) {
-  const { email, assignedTo, createdBy } = body
-  
+  const email = body?.email?.toLowerCase()
+  const assignedTo = body?.assignedTo || 'admin'
+  const createdBy = body?.createdBy || 'admin'
+
+  if (!email) {
+    return jsonResponse({
+      error: 'Email is required'
+    }, 400, origin)
+  }
+
+  if (!body.password) {
+    return jsonResponse({
+      error: 'Password is required'
+    }, 400, origin)
+  }
+
+  const password = body.password  
+
   try {
     console.log(`[admin-handler] Creating training account: ${email}`)
-    const password = generatePassword()
-    
+
+    // STEP 1: Create auth user
+    const { data: authData, error: authError } =
+      await supabaseAdmin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true
+      })
+
+    let authUserId: string | null = null
+
+    // HANDLE AUTH RESULT
+    if (authError) {
+      console.error('[admin-handler] Auth error:', authError.message)
+
+      // If user already exists → fetch it
+      if (authError.message?.includes('already been registered')) {
+        console.log('[admin-handler] User exists, fetching...')
+
+        const { data: existingUsers } =
+          await supabaseAdmin.auth.admin.listUsers()
+
+        const existingUser = existingUsers?.users?.find(
+          (u: any) => u.email === email
+        )
+
+        if (!existingUser) {
+          return jsonResponse({
+            error: 'User exists but could not be found'
+          }, 500, origin)
+        }
+
+        authUserId = existingUser.id
+      } else {
+        return jsonResponse({
+          error: 'Failed to create auth user',
+          details: authError.message
+        }, 400, origin)
+      }
+    } else {
+      authUserId = authData?.user?.id || null
+    }
+
+    // 🚨 CRITICAL SAFETY CHECK
+    if (!authUserId) {
+      return jsonResponse({
+        error: 'User ID is null - cannot proceed'
+      }, 500, origin)
+    }
+
+    console.log('[admin-handler] Auth user ID:', authUserId)
+
+    // STEP 2: Insert into training_accounts
     const { data: trainingAccount, error } = await supabase
       .from('training_accounts')
-      .insert({
-        email: email.toLowerCase(),
-        password,
-        assigned_to: assignedTo,
-        created_by: createdBy,
-        status: 'active'
-      })
+     .insert({
+  email,
+  password,
+  assigned_to: assignedTo,
+  created_by: createdBy,
+  status: 'active',
+  auth_user_id: authUserId,
+  task_number: 45,           
+  product_name: 'training',
+  amount: 1100,              
+  commission: 0
+}) 
       .select()
       .single()
 
     if (error) {
-      console.error('[admin-handler] Error creating training account:', error.message)
-      throw error
+     console.error('[admin-handler] DB ERROR FULL:', error) 
+
+      return jsonResponse({
+        error: 'Failed to create training account',
+        details: error.message
+      }, 500, origin)
     }
 
     console.log('[admin-handler] Training account created:', email)
-    return jsonResponse({ 
+
+    return jsonResponse({
       success: true,
       trainingAccount,
-      message: 'Training account created successfully' 
+      authUserId,
+      message: 'Training account created successfully'
     }, 200, origin)
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[admin-handler] Create training account error:', errMsg)
-    return jsonResponse({ 
-      success: false, 
-      error: errMsg || 'Failed to create training account' 
-    }, 500, origin)
-  }
-}
 
-async function handleCreatePersonalAccount(body: any, origin: string | null) {
-  const { email, displayName, vipLevel } = body
-  
-  try {
-    console.log(`[admin-handler] Creating personal account: ${email}`)
-    
-    const newUser = {
-      id: generateId(),
-      email: email.toLowerCase(),
-      display_name: displayName,
-      vip_level: vipLevel,
-      balance: 0,
-      total_earned: 0,
-      referral_code: Math.random().toString(36).substring(2, 8).toUpperCase(),
-      account_type: 'personal',
-      user_status: 'active',
-      training_completed: true,
-      training_progress: 100,
-      training_phase: 2,
-      tasks_completed: 0,
-      trigger_task_number: null,
-      has_pending_order: false,
-      pending_amount: 0,
-      is_negative_balance: false,
-      profit_added: false
-    }
+  } catch (err: any) {
+    console.error('[admin-handler] UNEXPECTED ERROR:', err)
 
-    const { data: user, error } = await supabase
-      .from('users')
-      .insert(newUser)
-      .select()
-      .single()
-
-    if (error) {
-      console.error('[admin-handler] Error creating personal account:', error.message)
-      throw error
-    }
-
-    // Create 35 personal tasks
-    const tasks = Array.from({ length: 35 }, (_, i) => ({
-      user_id: user.id,
-      task_number: i + 1,
-      status: i === 0 ? 'pending' : 'locked',
-      reward: Math.floor(Math.random() * 20) + 10
-    }))
-
-    const { error: tasksError } = await supabase.from('tasks').insert(tasks)
-    
-    if (tasksError) {
-      console.error('[admin-handler] Error creating tasks:', tasksError.message)
-      throw tasksError
-    }
-
-    console.log('[admin-handler] Personal account created:', email)
-    return jsonResponse({ 
-      success: true,
-      user,
-      message: 'Personal account created successfully' 
-    }, 200, origin)
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[admin-handler] Create personal account error:', errMsg)
-    return jsonResponse({ 
-      success: false, 
-      error: errMsg || 'Failed to create personal account' 
-    }, 500, origin)
-  }
-}
-
-async function handleResetTraining(body: any, origin: string | null) {
-  const { userId } = body
-  
-  try {
-    console.log(`[admin-handler] Resetting training for user: ${userId}`)
-    
-    // Reset user training progress
-    const { error } = await supabase
-      .from('users')
-      .update({
-        training_progress: 0,
-        training_phase: 1,
-        tasks_completed: 0,
-        trigger_task_number: null,
-        has_pending_order: false,
-        pending_amount: 0,
-        is_negative_balance: false,
-        profit_added: false
-      })
-      .eq('id', userId)
-
-    if (error) {
-      console.error('[admin-handler] Error resetting training:', error.message)
-      throw error
-    }
-
-    // Reset tasks
-    await supabase
-      .from('tasks')
-      .update({ status: 'locked' })
-      .eq('user_id', userId)
-
-    // Set first task to pending
-    await supabase
-      .from('tasks')
-      .update({ status: 'pending' })
-      .eq('user_id', userId)
-      .eq('task_number', 1)
-
-    console.log('[admin-handler] Training reset successfully')
-    return jsonResponse({ 
-      success: true,
-      message: 'Training reset successfully' 
-    }, 200, origin)
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[admin-handler] Reset training error:', errMsg)
-    return jsonResponse({ 
-      success: false, 
-      error: errMsg || 'Failed to reset training' 
-    }, 500, origin)
-  }
-}
-
-async function handleCompleteTask(body: any, origin: string | null) {
-  const { userId, taskNumber } = body
-  
-  try {
-    console.log(`[admin-handler] Completing task ${taskNumber} for user ${userId}`)
-    
-    // Update task status
-    const { error: taskError } = await supabase
-      .from('tasks')
-      .update({ 
-        status: 'completed',
-        completed_at: new Date().toISOString()
-      })
-      .eq('user_id', userId)
-      .eq('task_number', taskNumber)
-
-    if (taskError) {
-      console.error('[admin-handler] Error updating task:', taskError.message)
-      throw taskError
-    }
-
-    // Get task reward
-    const { data: task } = await supabase
-      .from('tasks')
-      .select('reward')
-      .eq('user_id', userId)
-      .eq('task_number', taskNumber)
-      .single()
-
-    if (!task) throw new Error('Task not found')
-
-    // Update user balance and progress
-    const { error: userError } = await supabase
-      .from('users')
-      .update({
-        balance: supabase.sql`balance + ${task.reward}`,
-        total_earned: supabase.sql`total_earned + ${task.reward}`,
-        tasks_completed: supabase.sql`tasks_completed + 1`
-      })
-      .eq('id', userId)
-
-    if (userError) {
-      console.error('[admin-handler] Error updating user:', userError.message)
-      throw userError
-    }
-
-    // Create transaction record
-    await supabase
-      .from('transactions')
-      .insert({
-        user_id: userId,
-        type: 'task_reward',
-        amount: task.reward,
-        status: 'completed',
-        description: `Task ${taskNumber} reward`
-      })
-
-    // Set next task to pending
-    await supabase
-      .from('tasks')
-      .update({ status: 'pending' })
-      .eq('user_id', userId)
-      .eq('task_number', taskNumber + 1)
-
-    console.log('[admin-handler] Task completed successfully')
-    return jsonResponse({ 
-      success: true,
-      message: 'Task completed successfully',
-      reward: task.reward
-    }, 200, origin)
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[admin-handler] Complete task error:', errMsg)
-    return jsonResponse({ 
-      success: false, 
-      error: errMsg || 'Failed to complete task' 
-    }, 500, origin)
-  }
-}
-
-async function handleGetUserData(body: any, origin: string | null) {
-  const { userId } = body
-  
-  try {
-    console.log(`[admin-handler] Getting user data: ${userId}`)
-    
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single()
-
-    if (error) {
-      console.error('[admin-handler] Error getting user:', error.message)
-      throw error
-    }
-
-    const { data: tasks } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('user_id', userId)
-      .order('task_number')
-
-    const { data: transactions } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(50)
-
-    console.log('[admin-handler] User data retrieved successfully')
-    return jsonResponse({ 
-      success: true,
-      user,
-      tasks,
-      transactions
-    }, 200, origin)
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[admin-handler] Get user data error:', errMsg)
-    return jsonResponse({ 
-      success: false, 
-      error: errMsg || 'Failed to get user data' 
-    }, 500, origin)
-  }
-}
-
-// Handle upgrade account action
-async function handleUpgradeAccount(body: any, origin: string | null) {
-  const { userId } = body
-  
-  try {
-    console.log(`[admin-handler] Upgrading account: ${userId}`)
-    
-    const { error } = await supabase
-      .from('users')
-      .update({
-        account_type: 'personal',
-        training_completed: true,
-        training_progress: 100,
-        training_phase: 2
-      })
-      .eq('id', userId)
-
-    if (error) {
-      console.error('[admin-handler] Error upgrading account:', error.message)
-      throw error
-    }
-
-    console.log('[admin-handler] Account upgraded successfully')
-    return jsonResponse({ 
-      success: true,
-      message: 'Account upgraded to personal' 
-    }, 200, origin)
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[admin-handler] Upgrade account error:', errMsg)
-    return jsonResponse({ 
-      success: false, 
-      error: errMsg || 'Failed to upgrade account' 
+    return jsonResponse({
+      success: false,
+      error: err?.message || 'Unknown error'
     }, 500, origin)
   }
 }

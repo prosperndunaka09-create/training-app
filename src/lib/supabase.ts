@@ -1,8 +1,13 @@
 import { createClient } from '@supabase/supabase-js'
-console.log("SUPABASE URL:", import.meta.env.VITE_SUPABASE_URL)
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
+
+console.log("=== SUPABASE CONFIGURATION ===")
+console.log("SUPABASE URL:", supabaseUrl)
+console.log("Expected Production URL: https://ybxshqzwirqfybdeukvq.supabase.co")
+console.log("URL Match:", supabaseUrl === "https://ybxshqzwirqfybdeukvq.supabase.co" ? "✓ CORRECT" : "✗ INCORRECT")
+console.log("================================")
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables')
@@ -12,6 +17,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
+    detectSessionInUrl: true,
   },
 })
 export default supabase;

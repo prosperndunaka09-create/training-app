@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import SupabaseService, { DatabaseUser, DatabaseTask, DatabaseTransaction } from '@/services/supabaseService';
+import SupabaseService, { DatabaseUser, DatabaseTask, DatabaseTransaction, Phase2Checkpoint } from '@/services/supabaseService';
+import ProductCatalogService from '@/services/productCatalogService';
 import { toast } from '@/components/ui/use-toast';
 
 // ===========================================
@@ -25,6 +26,8 @@ export interface User {
   personal_account_id?: string;
   training_phase: 1 | 2;
   tasks_completed: number;
+  total_tasks?: number;
+  task_number?: number;
   trigger_task_number: 19 | 24 | 31 | 32 | null;
   has_pending_order: boolean;
   pending_amount: number;
@@ -37,6 +40,8 @@ export interface User {
     category: string;
     image: string;
   };
+  phase2_checkpoint?: Phase2Checkpoint | null;
+  has_pending_checkpoint?: boolean;
 }
 export interface Product {
   id: string;
@@ -159,6 +164,11 @@ export interface AppContextType {
   refreshTransactions: () => Promise<void>;
   addWallet: (walletAddress: string, walletType: string) => Promise<boolean>;
   refreshWallets: () => Promise<void>;
+  
+  // Withdrawals
+  requestWithdrawal: (amount: number, walletAddress: string, walletType: string) => Promise<{ success: boolean; error?: string }>;
+  getWithdrawalHistory: () => Promise<any[]>;
+  hasPendingWithdrawal: () => Promise<boolean>;
 }
 
 // ===========================================
@@ -256,8 +266,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const isCheckingAuth = useRef(false);
+  const isRefreshingTasks = useRef(false);
+  const lastRefreshTime = useRef<number>(0);
   const [activeTab, setActiveTab] = useState('dashboard');
-  
+
   // Auth Modal UI State
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
@@ -268,98 +280,76 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   
   useEffect(() => {
     const checkSession = async () => {
+      // Skip auth check on admin route - admin uses localStorage-based auth
+      if (window.location.pathname.startsWith('/admin')) {
+        console.log('[checkSession] Skipping auth check on /admin route');
+        return;
+      }
+
       // Prevent concurrent auth checks
       if (isCheckingAuth.current) {
         console.log('[checkSession] Auth check already in progress, skipping...');
         return;
       }
-      
+
       isCheckingAuth.current = true;
       setIsLoading(true);
       try {
+        // First, restore Supabase session from storage
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        console.log('[checkSession] Supabase session restored:', session ? 'Active' : 'None');
+        if (sessionError) {
+          console.error('[checkSession] Session restore error:', sessionError);
+        }
+
+        // Only treat as logged out if session is explicitly null (not just an error)
+        if (session === null) {
+          console.log('[checkSession] No session found, user is logged out');
+          setUser(null);
+          setIsAuthenticated(false);
+          return;
+        }
+
         const dbUser = await SupabaseService.getCurrentUser();
-        
+
         if (dbUser) {
           setUser(mapDatabaseUserToUser(dbUser));
           setIsAuthenticated(true);
-          
+
           // Load user data
           await loadUserData(dbUser.id);
         } else {
-          // Check for training account session in localStorage
-          const trainingSession = localStorage.getItem('training_session');
-          if (trainingSession) {
-            try {
-              const sessionData = JSON.parse(trainingSession);
-              const trainingAccount = await SupabaseService.validateTrainingAccount(
-                sessionData.email,
-                sessionData.password
-              );
-              
-              if (trainingAccount) {
-                const trainingUser: User = {
-                  id: trainingAccount.id,
-                  email: trainingAccount.email,
-                  phone: trainingAccount.phone,
-                  display_name: trainingAccount.display_name,
-                  vip_level: 2 as const,
-                  balance: trainingAccount.balance,
-                  total_earned: trainingAccount.total_earned,
-                  referral_code: trainingAccount.referral_code || '',
-                  created_at: trainingAccount.created_at,
-                  account_type: 'training',
-                  training_completed: trainingAccount.training_completed,
-                  training_progress: trainingAccount.training_progress,
-                  user_status: (trainingAccount.user_status || 'active') as 'active',
-                  training_phase: (trainingAccount.training_phase || 1) as 1,
-                  tasks_completed: trainingAccount.tasks_completed,
-                  trigger_task_number: (trainingAccount.trigger_task_number || null) as 19 | 24 | 31 | 32 | null,
-                  has_pending_order: trainingAccount.has_pending_order,
-                  pending_amount: trainingAccount.pending_amount,
-                  is_negative_balance: trainingAccount.is_negative_balance,
-                  profit_added: trainingAccount.profit_added
-                };
-                
-                setUser(trainingUser);
-                setIsAuthenticated(true);
-                
-                // Load training data from localStorage
-                await loadUserData(trainingUser.id, 'training', trainingUser.email);
-              } else {
-                // Invalid training session, clear it
-                localStorage.removeItem('training_session');
-                setUser(null);
-                setIsAuthenticated(false);
-              }
-            } catch (error) {
-              console.error('Error restoring training session:', error);
-              localStorage.removeItem('training_session');
-              setUser(null);
-              setIsAuthenticated(false);
-            }
-          } else {
-            setUser(null);
-            setIsAuthenticated(false);
-          }
+          setUser(null);
+          setIsAuthenticated(false);
         }
       } catch (error) {
         console.error('Error checking session:', error);
+        // Don't auto-logout on error - just log it
       } finally {
         setIsLoading(false);
         isCheckingAuth.current = false;
       }
     };
-    
+
     checkSession();
     
     // Subscribe to auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // Skip auth state changes on admin route - admin uses localStorage-based auth
+      if (window.location.pathname.startsWith('/admin')) {
+        console.log('[Auth State Change] Skipping on /admin route');
+        return;
+      }
+
+      console.log('[Auth State Change] Event:', event);
+      console.log('[Auth State Change] Session:', session ? 'Active' : 'None');
+
       // Skip if we're already checking auth (prevent concurrent operations)
       if (isCheckingAuth.current) {
         console.log('[authStateChange] Auth check in progress, skipping...');
         return;
       }
-      
+
       if (event === 'SIGNED_IN' && session?.user) {
         isCheckingAuth.current = true;
         const dbUser = await SupabaseService.getUserById(session.user.id);
@@ -370,73 +360,202 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
         isCheckingAuth.current = false;
       } else if (event === 'SIGNED_OUT') {
+        console.log('[Auth State Change] User signed out');
         setUser(null);
         setIsAuthenticated(false);
         setTasks([]);
         setTransactions([]);
         setWallets([]);
+      } else if (event === 'TOKEN_REFRESHED') {
+        console.log('[Auth State Change] Token refreshed successfully');
       }
     });
     
+    // Listen for checkpoint refresh events from TaskGrid realtime subscription
+    const handleCheckpointRefresh = async (event: any) => {
+      console.log('[AppContext] Checkpoint refresh event received:', event.detail);
+      if (user?.id) {
+        console.log('[AppContext] Refreshing user data after checkpoint update');
+        await refreshUser();
+      }
+    };
+    window.addEventListener('refresh_user_checkpoint', handleCheckpointRefresh);
+    
     return () => {
       subscription.unsubscribe();
+      window.removeEventListener('refresh_user_checkpoint', handleCheckpointRefresh);
     };
   }, []);
 
   const loadUserData = async (userId: string, accountType?: 'training' | 'personal' | 'admin', email?: string) => {
-    const userEmail = email || user?.email;
-    const isTraining = accountType === 'training' || user?.account_type === 'training';
-    
-    // For training accounts, load from localStorage only (skip Supabase)
-    if (isTraining && userEmail) {
+    console.log('[loadUserData] Starting loadUserData - userId:', userId, 'accountType param:', accountType);
+
+    // ALWAYS fetch user from public.users first to get account_type
+    let dbUser = null;
+    try {
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (userError) {
+        console.error('[loadUserData] Error fetching user from public.users:', userError);
+        return;
+      }
+
+      if (!userData) {
+        console.error('[loadUserData] User not found in public.users');
+        return;
+      }
+
+      console.log('[loadUserData] Loaded user from public.users:', userData);
+      dbUser = userData;
+    } catch (error) {
+      console.error('[loadUserData] Exception fetching user from public.users:', error);
+      return;
+    }
+
+    // Set accountType from the fetched user
+    const actualAccountType = dbUser.account_type as 'training' | 'personal' | 'admin';
+    const userEmail = dbUser.email || email;
+    const isTraining = actualAccountType === 'training';
+
+    console.log('[loadUserData] accountType from DB:', actualAccountType, 'isTraining:', isTraining, 'userEmail:', userEmail);
+
+    // For training accounts, fetch from training_accounts table directly
+    if (isTraining && userId) {
       try {
-        const emailKey = userEmail.toLowerCase();
-        
-        // Load tasks from localStorage
-        const localTasks = localStorage.getItem(`training_tasks_${emailKey}`);
-        if (localTasks) {
-          const parsedTasks = JSON.parse(localTasks);
-          if (parsedTasks && parsedTasks.length > 0) {
-            setTasks(parsedTasks);
-          }
-        } else {
-          setTasks([]);
-        }
-        
-        // Load task history from localStorage
-        const localHistory = localStorage.getItem(`training_history_${emailKey}`);
-        if (localHistory) {
-          const parsedHistory = JSON.parse(localHistory);
-          if (parsedHistory && parsedHistory.length > 0) {
-            setTaskHistory(parsedHistory);
-          }
-        }
-        
-        // Load wallet state from localStorage
-        const localWallet = localStorage.getItem(`training_wallet_${emailKey}`);
-        if (localWallet) {
-          const parsedWallet = JSON.parse(localWallet);
-          if (parsedWallet) {
-            setWalletState(parsedWallet);
-          }
-        } else {
-          // Initialize walletState from training account balance if no wallet data exists
-          // Use the user state if available, otherwise use default training balance
-          const initialBalance = user?.balance || 1100;
-          const initialTotalEarned = user?.total_earned || 0;
-          const initialWallet: WalletState = {
-            available_balance: initialBalance,
+        console.log('[loadUserData] Fetching training account data for user ID:', userId);
+
+        // Fetch training account data from Supabase using auth_user_id
+        const { data: trainingAccount, error: trainingError } = await supabase
+          .from('training_accounts')
+          .select('*')
+          .eq('auth_user_id', userId)
+          .single();
+
+        console.log('[DEBUG] Training account data:', trainingAccount);
+
+        if (trainingAccount && !trainingError) {
+          console.log('[loadUserData] Training account found:', trainingAccount);
+
+          // Override user data with training account values
+          const trainingBalance = trainingAccount.amount || 0;
+          const trainingTotalTasks = trainingAccount.total_tasks || 45;
+          const trainingTaskNumber = trainingAccount.task_number || 1; // Next task to complete
+          const completedTasks = Math.max(0, trainingTaskNumber - 1); // Completed tasks = next task - 1
+
+          console.log('[loadUserData] Training data override - Balance:', trainingBalance, 'Next task:', trainingTaskNumber, 'Completed tasks:', completedTasks, 'Total Tasks:', trainingTotalTasks);
+
+          // Calculate total_earned as balance - initial training balance (1100)
+          const INITIAL_TRAINING_BALANCE = 1100;
+          const totalEarned = Math.max(0, trainingBalance - INITIAL_TRAINING_BALANCE);
+          
+          // Update user state with training account data
+          setUser(prev => prev ? {
+            ...prev,
+            balance: trainingBalance,
+            tasks_completed: completedTasks, // Use calculated completed count
+            task_number: trainingTaskNumber, // Next task to complete
+            total_tasks: trainingTotalTasks,
+            total_earned: totalEarned, // Set correct total_earned
+          } : null);
+
+          // Update wallet state with training account balance
+          const trainingWallet: WalletState = {
+            available_balance: trainingBalance,
             pending_balance: 0,
-            total_earned: initialTotalEarned,
+            total_earned: totalEarned, // Set correct total_earned
             total_withdrawn: 0,
             transactions: []
           };
-          setWalletState(initialWallet);
-          // Persist initial wallet state to localStorage
-          localStorage.setItem(`training_wallet_${emailKey}`, JSON.stringify(initialWallet));
+          setWalletState(trainingWallet);
+          console.log('[loadUserData] Set walletState for training account:', trainingWallet);
+
+          // Tasks will be loaded by refreshTasks using Supabase task_number as source of truth
+          // Don't set tasks here to avoid stale data - refreshTasks will handle it
+          console.log('[loadUserData] Skipping task creation - refreshTasks will rebuild from Supabase task_number');
+          
+          // Check for Phase 2 checkpoint - ONLY in Phase 2
+          // Use getAnyPhase2Checkpoint to find ANY existing checkpoint (regardless of task_number)
+          // This prevents duplicate checkpoint creation at different task numbers
+          // AND ensures we know if checkpoint was already processed even when past task 31/32
+          const isPhase2 = Number(dbUser?.training_phase) === 2;
+          if (isPhase2) {
+            console.log('[Checkpoint] loadUserData - Phase 2 detected, checking for ANY existing checkpoint');
+            const checkpoint = await SupabaseService.getAnyPhase2Checkpoint(userId);
+            if (checkpoint) {
+              console.log('[Checkpoint] loadUserData - Found checkpoint:', checkpoint.id, 'status:', checkpoint.status, 'created_at_task:', checkpoint.task_number);
+              
+              // If checkpoint already processed, don't show modal again
+              if (checkpoint.status === 'completed' || checkpoint.status === 'bonus_paid' || checkpoint.status === 'submitted') {
+                console.log('[Checkpoint] loadUserData - Checkpoint already processed - hiding modal');
+                setUser(prev => prev ? {
+                  ...prev,
+                  phase2_checkpoint: null,
+                  has_pending_checkpoint: false
+                } : null);
+              } else if (checkpoint.status === 'pending_review') {
+                console.log('[Checkpoint] loadUserData - Task will be blocked until admin approval');
+                setUser(prev => prev ? {
+                  ...prev,
+                  phase2_checkpoint: checkpoint,
+                  has_pending_checkpoint: true
+                } : null);
+              } else if (checkpoint.status === 'approved') {
+                // Check if this is a broken state: checkpoint approved but task_number already advanced
+                // This happens when bonus was added but checkpoint status update failed
+                const currentTaskNum = trainingAccount?.task_number || 0;
+                const checkpointTaskNum = checkpoint.task_number || 0;
+                
+                if (currentTaskNum > checkpointTaskNum) {
+                  console.log('[Checkpoint] loadUserData - RECOVERY: Checkpoint approved but task_number advanced (' + 
+                    checkpointTaskNum + ' -> ' + currentTaskNum + '). Treating as completed.');
+                  // Auto-update checkpoint status to completed in background
+                  SupabaseService.updateCheckpointStatus(checkpoint.id, 'completed').catch(err => {
+                    console.error('[Checkpoint] Auto-recovery failed:', err);
+                  });
+                  // Clear checkpoint from state so tasks can render
+                  setUser(prev => prev ? {
+                    ...prev,
+                    phase2_checkpoint: null,
+                    has_pending_checkpoint: false
+                  } : null);
+                } else {
+                  console.log('[Checkpoint] loadUserData - Checkpoint approved - user must submit premium product');
+                  setUser(prev => prev ? {
+                    ...prev,
+                    phase2_checkpoint: checkpoint,
+                    has_pending_checkpoint: false
+                  } : null);
+                }
+              }
+            } else {
+              console.log('[Checkpoint] loadUserData - No existing checkpoint found for this user');
+            }
+          }
+        } else {
+          console.log('[loadUserData] No training account found in Supabase');
+          setTasks([]);
+          setWalletState({
+            available_balance: 0,
+            pending_balance: 0,
+            total_earned: 0,
+            total_withdrawn: 0,
+            transactions: []
+          });
         }
       } catch (error) {
-        console.error('Error loading training data from localStorage:', error);
+        console.error('[loadUserData] Error loading training data:', error);
+        setTasks([]);
+        setWalletState({
+          available_balance: 0,
+          pending_balance: 0,
+          total_earned: 0,
+          total_withdrawn: 0,
+          transactions: []
+        });
       }
     } else {
       // For personal/admin accounts, load from Supabase
@@ -449,9 +568,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTasks([]);
       }
     }
-    
+
     // For personal/admin accounts, load transactions and wallets from Supabase
-    // Training accounts use localStorage wallet state only
     if (!isTraining) {
       try {
         // Load transactions
@@ -461,14 +579,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         console.error('Error loading transactions:', error);
         setTransactions([]);
       }
-      
+
       try {
         // Load wallets - pass userId directly to avoid race condition
         const { data, error } = await supabase
           .from('wallets')
           .select('*')
           .eq('user_id', userId);
-        
+
         if (error) {
           console.error('Error loading wallets:', error);
           setWallets([]);
@@ -493,39 +611,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     setAuthLoading(true);
     try {
-      console.log('[login] Attempting login for email:', email);
+      console.log('[AppContext.login] Attempting login for email:', email);
       
-      // FIRST: Check localStorage for training account (fast path)
-      const emailKey = email.toLowerCase();
-      const storedAccount = localStorage.getItem(`training_account_${emailKey}`);
-      
-      if (storedAccount) {
-        console.log('[login] Training account found in localStorage, validating...');
-        const trainingResult = await loginTrainingAccount(email, password);
-        
-        console.log('[login] Training account login result:', trainingResult);
-        
-        if (trainingResult.success) {
-          setAuthLoading(false);
-          console.log('[login] Training account login successful');
-          return { success: true };
-        }
-        
-        console.log('[login] Training account validation failed, clearing localStorage and trying Supabase auth...');
-        localStorage.removeItem(`training_account_${emailKey}`);
-      } else {
-        console.log('[login] No training account in localStorage, skipping to Supabase auth...');
-      }
-      
-      // SECOND: Try Supabase auth for personal accounts
-      console.log('[login] Trying Supabase auth...');
+      // Try Supabase auth for personal accounts
+      console.log('[AppContext.login] Trying Supabase auth...');
       const { user: dbUser, error } = await SupabaseService.signIn(email, password);
       
       if (error || !dbUser) {
         setAuthLoading(false);
-        // Provide clearer error message
+        // Provide clearer error message - do NOT reset app state on failed login
         const errorMsg = error || 'Login failed';
-        console.log('[login] Supabase auth failed:', errorMsg);
+        console.log('[AppContext.login] Supabase auth failed:', errorMsg);
+        // Failed login should NOT trigger logout - just return error
         return { success: false, error: errorMsg };
       }
       
@@ -539,59 +636,110 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         description: `Successfully logged in as ${dbUser.display_name}`
       });
       
+      console.log('[AppContext.login] Login successful for:', email);
       return { success: true };
     } catch (error: any) {
       setAuthLoading(false);
-      console.log('[login] Exception during login:', error);
+      console.log('[AppContext.login] Exception during login:', error);
+      // Exception should NOT trigger logout - just return error
       return { success: false, error: error.message };
     }
   };
 
   const loginTrainingAccount = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      console.log('[loginTrainingAccount] Validating training account for email:', email);
-      const trainingAccount = await SupabaseService.validateTrainingAccount(email, password);
+      console.log('[loginTrainingAccount] Attempting Supabase auth for training account:', email);
       
-      console.log('[loginTrainingAccount] Validation result:', trainingAccount);
+      // Use Supabase auth to sign in (training accounts should have auth users)
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: email.toLowerCase(),
+        password: password
+      });
       
-      if (!trainingAccount) {
-        console.log('[loginTrainingAccount] Training account validation failed');
-        return { success: false, error: 'Invalid training account credentials' };
+      if (authError || !authData.user) {
+        console.log('[loginTrainingAccount] Supabase auth failed:', authError);
+        return { success: false, error: authError?.message || 'Invalid credentials' };
       }
       
-      // Map training account to User type for dashboard
-      const trainingUser: User = {
-        id: trainingAccount.id,
-        email: trainingAccount.email,
-        phone: trainingAccount.phone,
-        display_name: trainingAccount.display_name,
-        vip_level: 2 as const,
-        balance: trainingAccount.balance,
-        total_earned: trainingAccount.total_earned,
-        referral_code: trainingAccount.referral_code || '',
-        created_at: trainingAccount.created_at,
-        account_type: 'training',
-        training_completed: trainingAccount.training_completed,
-        training_progress: trainingAccount.training_progress,
-        user_status: (trainingAccount.user_status || 'active') as 'active',
-        training_phase: (trainingAccount.training_phase || 1) as 1,
-        tasks_completed: trainingAccount.tasks_completed,
-        trigger_task_number: (trainingAccount.trigger_task_number || null) as 19 | 24 | 31 | 32 | null,
-        has_pending_order: trainingAccount.has_pending_order,
-        pending_amount: trainingAccount.pending_amount,
-        is_negative_balance: trainingAccount.is_negative_balance,
-        profit_added: trainingAccount.profit_added
-      };
+      console.log('[loginTrainingAccount] Supabase auth successful, user ID:', authData.user.id);
       
-      console.log('[loginTrainingAccount] Setting training user state:', trainingUser.email);
-      setUser(trainingUser);
-      setIsAuthenticated(true);
+      // Fetch training account data from training_accounts table
+      const { data: trainingAccount, error: trainingError } = await supabase
+        .from('training_accounts')
+        .select('*')
+        .eq('auth_user_id', authData.user.id)
+        .single();
       
-      // Save training session to localStorage for persistence across refreshes
-      localStorage.setItem('training_session', JSON.stringify({ email, password }));
+      console.log('[DEBUG] Training account data:', trainingAccount);
       
-      // Load training tasks from localStorage
-      await loadUserData(trainingUser.id, 'training', trainingUser.email);
+      if (!trainingAccount || trainingError) {
+        console.log('[loginTrainingAccount] No training account found for this auth user');
+        // User exists in auth but no training account record - create minimal user state
+        const trainingUser: User = {
+          id: authData.user.id,
+          email: authData.user.email || email,
+          phone: null,
+          display_name: authData.user.user_metadata?.display_name || email.split('@')[0] || 'Training User',
+          vip_level: 2 as const,
+          balance: 0,
+          total_earned: 0,
+          referral_code: '',
+          created_at: authData.user.created_at || new Date().toISOString(),
+          account_type: 'training',
+          training_completed: false,
+          training_progress: 0,
+          user_status: 'active',
+          training_phase: 1,
+          tasks_completed: 0,
+          total_tasks: 45,
+          trigger_task_number: null,
+          has_pending_order: false,
+          pending_amount: 0,
+          is_negative_balance: false,
+          profit_added: false
+        };
+        
+        setUser(trainingUser);
+        setIsAuthenticated(true);
+        await loadUserData(trainingUser.id, 'training', trainingUser.email);
+      } else {
+        // Use training account data from database
+        const trainingUser: User = {
+          id: authData.user.id,
+          email: trainingAccount.email,
+          phone: null,
+          display_name: trainingAccount.email.split('@')[0] || 'Training User',
+          vip_level: 2 as const,
+          balance: trainingAccount.amount || 0,
+          total_earned: trainingAccount.amount || 0,
+          referral_code: '',
+          created_at: trainingAccount.created_at,
+          account_type: 'training',
+          training_completed: trainingAccount.completed || false,
+          training_progress: 0, // No progress column in DB
+          user_status: 'active',
+          training_phase: 1,
+          tasks_completed: Math.max(0, (trainingAccount.task_number || 1) - 1), // Calculate from task_number
+          task_number: trainingAccount.task_number || 1, // Next task to complete
+          total_tasks: trainingAccount.total_tasks || 45,
+          trigger_task_number: null,
+          has_pending_order: false,
+          pending_amount: 0,
+          is_negative_balance: false,
+          profit_added: false
+        };
+        
+        console.log('[loginTrainingAccount] Setting training user state with DB values:', {
+          email: trainingUser.email,
+          balance: trainingUser.balance,
+          tasks_completed: trainingUser.tasks_completed,
+          total_tasks: trainingUser.total_tasks
+        });
+        
+        setUser(trainingUser);
+        setIsAuthenticated(true);
+        await loadUserData(trainingUser.id, 'training', trainingUser.email);
+      }
       
       setAuthLoading(false);
       
@@ -603,6 +751,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return { success: true };
     } catch (error: any) {
       setAuthLoading(false);
+      console.error('[loginTrainingAccount] Error:', error);
       return { success: false, error: error.message };
     }
   };
@@ -621,10 +770,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setUser(mappedUser);
       setIsAuthenticated(true);
       await loadUserData(dbUser.id);
-
-      // Save training account to localStorage
-      const emailKey = mappedUser.email.toLowerCase();
-      localStorage.setItem(`training_account_${emailKey}`, JSON.stringify(mappedUser));
 
       setAuthLoading(false);
 
@@ -677,28 +822,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     
     await SupabaseService.signOut();
-    
+
     // Clear session-only localStorage keys
-    // IMPORTANT: Never clear training account data - these keys must persist across logouts:
-    // - training_account_* (training account credentials)
-    // - training_tasks_* (training tasks)
-    // - training_wallet_* (training wallet state)
-    // - training_history_* (task history)
     localStorage.removeItem('opt_user');
     localStorage.removeItem('main_admin_authenticated');
-    
-    // Clear training session only (current session, NOT account data)
-    localStorage.removeItem('training_session');
-    
+
+    // Clear training account localStorage data
+    const userEmail = user?.email?.toLowerCase();
+    if (userEmail) {
+      localStorage.removeItem(`training_account_${userEmail}`);
+      localStorage.removeItem(`training_tasks_${userEmail}`);
+      localStorage.removeItem(`training_wallet_${userEmail}`);
+      localStorage.removeItem(`training_history_${userEmail}`);
+    }
+
+    // Reset all auth state immediately
     setUser(null);
     setIsAuthenticated(false);
     setTasks([]);
     setTransactions([]);
     setWallets([]);
+
     toast({ title: 'Logged out', description: 'See you soon!' });
-    
-    // Navigate to home page
-    window.location.href = '/';
   };
 
   // ===========================================
@@ -706,50 +851,290 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ===========================================
 
   const completeTask = async (taskNumber: number): Promise<{ success: boolean; reward?: number }> => {
+    console.log('[Task Submit] Started - task number:', taskNumber);
+    
     if (!user) {
+      console.error('[Task Submit] Error: User not found');
       return { success: false };
     }
 
     let result: { success: boolean; reward?: number } | null = null;
 
-    // For training accounts, handle completion locally (localStorage only)
+    // For training accounts, handle completion by updating training_accounts table
     if (user.account_type === 'training') {
       const task = tasks.find(t => t.task_number === taskNumber);
       if (!task) {
+        console.error('[Task Submit] Error: Task not found');
         return { success: false };
       }
 
-      const reward = task.reward || 0;
+      console.log('[Task Submit] Current task number:', taskNumber);
+      
+      // ===========================================
+      // PHASE 2 CHECKPOINT DETECTION - BEFORE TASK COMPLETION
+      // ONLY RUN IN PHASE 2 - Phase 1 has NO checkpoint logic
+      // ===========================================
+      const isPhase2 = Number(user?.training_phase) === 2;
+      console.log('[Checkpoint] Phase check - training_phase:', user?.training_phase, 'isPhase2:', isPhase2);
+      
+      // Only check for checkpoints in Phase 2
+      if (isPhase2) {
+        console.log('[Checkpoint] Current task number:', taskNumber);
+        
+        // Check if this is a checkpoint task (31 or 32 in Phase 2)
+        const isCheckpointTask = taskNumber === 31 || taskNumber === 32;
+        console.log('[Checkpoint] Should trigger:', isCheckpointTask);
+        
+        if (isCheckpointTask) {
+        // Check if ANY checkpoint already exists for this user (regardless of task_number)
+        // Phase 2 only allows ONE checkpoint event per training phase
+        console.log('[Checkpoint] Checking for ANY existing Phase 2 checkpoint for user');
+        const existingCheckpoint = await SupabaseService.getAnyPhase2Checkpoint(user.id);
+        
+        if (existingCheckpoint) {
+          console.log('[Checkpoint] Found existing checkpoint:', existingCheckpoint.id, 'status:', existingCheckpoint.status, 'task:', existingCheckpoint.task_number);
+          
+          // If checkpoint is completed/bonus_paid, allow normal task completion (checkpoint already processed)
+          // Do NOT show checkpoint modal again
+          if (
+  existingCheckpoint.status === 'completed' ||
+  existingCheckpoint.status === 'bonus_paid' ||
+  existingCheckpoint.status === 'submitted' ||
+  task.task_number > existingCheckpoint.task_number
+) {
+  console.log('[Checkpoint] Checkpoint already processed or passed - allowing normal task completion');
 
+  setUser(prevUser => ({
+    ...prevUser,
+    phase2_checkpoint: null,
+    has_pending_checkpoint: false
+  }));
+
+  // continue to normal task completion below
+}
+
+else if (existingCheckpoint.status === 'pending_review') {
+  console.log('[Checkpoint] Blocking submission - pending review');
+
+  setUser(prevUser => ({
+    ...prevUser,
+    phase2_checkpoint: existingCheckpoint,
+    has_pending_checkpoint: true
+  }));
+
+  return { success: false };
+}
+
+else if (
+  existingCheckpoint.status === 'approved' &&
+  task.task_number <= existingCheckpoint.task_number
+) {
+  console.log('[Checkpoint] Approved checkpoint requires premium submit');
+
+  setUser(prevUser => ({
+    ...prevUser,
+    phase2_checkpoint: existingCheckpoint,
+    has_pending_checkpoint: true
+  }));
+
+  return { success: false };
+}
+        } else {
+          // No checkpoint exists - create one (first time only)
+          console.log('[Checkpoint] No existing checkpoint found - creating new pending review checkpoint');
+          
+          // Get products for checkpoint display (current task and next task)
+          const product1 = ProductCatalogService.getProductForTask(taskNumber, 'training');
+          const product2 = ProductCatalogService.getProductForTask(taskNumber + 1, 'training');
+          
+          // Create checkpoint in Supabase BEFORE allowing task completion
+          const checkpoint = await SupabaseService.createPhase2Checkpoint(
+            user.id,
+            user.email || '',
+            taskNumber, // Store the current task number (31 or 32)
+            {
+              name: product1.name,
+              image: product1.image,
+              price: product1.price
+            },
+            {
+              name: product2.name,
+              image: product2.image,
+              price: product2.price
+            },
+            100 // Default bonus amount
+          );
+          
+          if (checkpoint) {
+            console.log('[Checkpoint] Created checkpoint:', checkpoint.id);
+            console.log('[Checkpoint] Blocking submission - checkpoint created');
+            
+            // Store checkpoint in user state for UI detection
+            setUser(prevUser => ({
+              ...prevUser,
+              phase2_checkpoint: checkpoint
+            }));
+            
+            // DO NOT complete the task - block submission
+            return { success: false };
+          }
+        }
+      }
+    }
+      
+      // Note: Approved checkpoint stays in state so UI shows premium submit button
+      // It will be cleared after user submits premium product and checkpoint becomes completed
+      
+      // ===========================================
+      // NORMAL TASK COMPLETION (non-checkpoint tasks or after approval)
+      // ===========================================
+      
+      // RESTORED: Original product-based commission with scaling to achieve $165.60 total
+      // Each product has unique commission based on its price
+      // Total scaled to equal exactly $165.60 for Phase 1 (45 tasks)
+      const PHASE1_TARGET_TOTAL = 165.60;
+      const RAW_COMMISSION_RATE = 0.01; // 1% base rate
+      const SCALE_FACTOR = 2.735; // Scale raw commissions to reach $165.60 total
+      
+      // Get product from catalog for commission calculation
+      const product = ProductCatalogService.getProductForTask(taskNumber, 'training');
+      const rawCommission = product.price * RAW_COMMISSION_RATE;
+      const scaledCommission = Math.round(rawCommission * SCALE_FACTOR * 100) / 100;
+      
+      console.log('[Task Submit] Product:', product.name, 'Price:', product.price, 'Commission:', scaledCommission);
+      
+      // Use scaled product-based commission
+      const commission = scaledCommission;
+      console.log('[Task Submit] Product-based commission:', commission);
+      
+      // Calculate new values BEFORE any state updates
+      const prevCompletedCount = tasks.filter(t => t.status === 'completed').length;
+      const updatedCompleted = prevCompletedCount + 1;
+      const nextTaskNumber = updatedCompleted + 1;
+
+      console.log('[Task Submit] Prev completed:', prevCompletedCount);
+      console.log('[Task Submit] Updated completed:', updatedCompleted);
+      console.log('[Task Submit] Next task number:', nextTaskNumber);
+
+      // Safety check for user ID
+      if (!user?.id) {
+        console.error('[Task Submit] Error: User ID missing, cannot update progress');
+        return { success: false };
+      }
+
+      // Get current balance from training_accounts
+      const { data: currentTrainingAccount, error: fetchError } = await supabase
+        .from('training_accounts')
+        .select('amount')
+        .eq('auth_user_id', user.id)
+        .single();
+      
+      if (fetchError || !currentTrainingAccount) {
+        console.error('[Task Submit] Error fetching current balance:', fetchError);
+        return { success: false };
+      }
+      
+      const oldBalance = currentTrainingAccount.amount || 0;
+      const newBalance = oldBalance + commission;
+      
+      console.log('[Task Submit] Old balance:', oldBalance);
+      console.log('[Task Submit] New balance:', newBalance);
+
+      // Update Supabase FIRST (source of truth)
+      const updatePayload = {
+        task_number: nextTaskNumber,
+        amount: newBalance,
+        commission: commission
+      };
+      
+      console.log('[Task Submit] Supabase update payload:', updatePayload);
+      
+      try {
+        const { error } = await supabase
+          .from('training_accounts')
+          .update(updatePayload)
+          .eq('auth_user_id', user.id);
+
+        if (error) {
+          console.error('[Task Submit] Supabase update failed:', error);
+          console.error('[Task Submit] Error details:', {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint
+          });
+          // FAIL-SAFE: Do NOT update local state if DB fails
+          return { success: false };
+        }
+
+        console.log('[Task Submit] Supabase update success - task_number:', nextTaskNumber, 'amount:', newBalance, 'commission:', commission);
+        
+      } catch (error) {
+        console.error('[Task Submit] Exception updating Supabase:', error);
+        // FAIL-SAFE: Do NOT update local state if DB fails
+        return { success: false };
+      }
+
+      // Update local state ONLY AFTER DB success
       const updatedTasks = tasks.map(t =>
         t.task_number === taskNumber
           ? {
               ...t,
               status: 'completed' as const,
-              completed_at: new Date().toISOString()
+              completed_at: new Date().toISOString(),
+              reward: commission // Update task reward with commission
             }
           : t
       );
 
       setTasks(updatedTasks);
 
-      const newCompletedCount = updatedTasks.filter(t => t.status === 'completed').length;
+      // Update localStorage for training tasks
+      const emailKey = user.email.toLowerCase();
+      localStorage.setItem(`training_tasks_${emailKey}`, JSON.stringify(updatedTasks));
 
-      const updatedUser = {
-        ...user,
-        tasks_completed: newCompletedCount,
-        training_progress: newCompletedCount
-      };
+      // Calculate total_earned as balance - 1100
+      const INITIAL_TRAINING_BALANCE = 1100;
+      const totalEarned = Math.max(0, newBalance - INITIAL_TRAINING_BALANCE);
+      
+      // Update user state with functional update to avoid stale values
+      setUser(prevUser => ({
+        ...prevUser,
+        tasks_completed: updatedCompleted,
+        training_progress: updatedCompleted,
+        balance: newBalance, // Update balance locally
+        total_earned: totalEarned // Update total_earned locally
+      }));
 
-      setUser(updatedUser);
-
-      if (user.email) {
-        const emailKey = user.email.toLowerCase();
-        localStorage.setItem(`training_tasks_${emailKey}`, JSON.stringify(updatedTasks));
-        localStorage.setItem(`training_account_${emailKey}`, JSON.stringify(updatedUser));
+      // Update wallet state with new balance
+      setWalletState(prev => ({
+        ...prev,
+        available_balance: newBalance,
+        total_earned: totalEarned
+      }));
+      
+      // Also update total_earned in public.users table for consistency
+      try {
+        const { error: userUpdateError } = await supabase
+          .from('users')
+          .update({ total_earned: totalEarned })
+          .eq('id', user.id);
+        
+        if (userUpdateError) {
+          console.error('[Task Submit] Failed to update users.total_earned:', userUpdateError);
+        } else {
+          console.log('[Task Submit] Updated users.total_earned:', totalEarned);
+        }
+      } catch (userUpdateErr) {
+        console.error('[Task Submit] Exception updating users.total_earned:', userUpdateErr);
       }
 
-      return { success: true, reward };
+      // Refresh user from Supabase to ensure sync with DB
+      await refreshUser();
+      await refreshTasks();
+
+      console.log('[Task Submit] Task completed successfully - commission:', commission);
+      return { success: true, reward: commission };
     } else {
       // For personal accounts, use Supabase
       result = await SupabaseService.completeTask(user.id, taskNumber);
@@ -797,20 +1182,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setWalletState(updatedWallet);
         }
       }
-    }
 
-    toast({
-      title: 'Task Completed!',
-      description: `You earned $${(result?.reward || 0).toFixed(2)}`
-    });
-    
-    // Check if we should trigger pending order for personal accounts
-    // Phase 2, task 28 triggers pending order
-    if (user.account_type === 'personal' && 
-        user.training_phase === 2 && 
-        taskNumber === 28 && 
-        !user.has_pending_order) {
-        
+      toast({
+        title: 'Task Completed!',
+        description: `You earned $${(result?.reward || 0).toFixed(2)}`
+      });
+
+      // Check if we should trigger pending order for personal accounts
+      // Phase 2, task 28 triggers pending order
+      if (user.account_type === 'personal' &&
+          user.training_phase === 2 &&
+          taskNumber === 28 &&
+          !user.has_pending_order) {
+
         // Create combination product for pending order
         const product1 = {
           name: 'Premium Wireless Headphones',
@@ -826,10 +1210,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           category: 'Wearables',
           image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400'
         };
-        
+
         const combinedPrice = product1.price + product2.price; // $83
         const pendingAmount = combinedPrice - user.balance; // Will be negative
-        
+
         // Create pending order
         await createPendingOrder(28, Math.abs(pendingAmount), {
           name: `${product1.name} + ${product2.name}`,
@@ -844,13 +1228,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           name1: product1.name,
           name2: product2.name
         });
-        
+
         toast({
           title: 'Combination Order Detected!',
           description: 'A premium combination product has been assigned. Contact customer service to clear.',
           variant: 'destructive'
         });
       }
+    }
 
     return result || { success: false };
   };
@@ -858,35 +1243,101 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const refreshTasks = useCallback(async (): Promise<void> => {
     if (!user) return;
     
-    // For training accounts, load from localStorage only (skip Supabase)
+    // Guard against duplicate refreshes within 2 seconds
+    const now = Date.now();
+    if (isRefreshingTasks.current) {
+      console.log('[refreshTasks] skipped - already refreshing');
+      return;
+    }
+    if (now - lastRefreshTime.current < 2000) {
+      console.log('[refreshTasks] skipped duplicate refresh - last refresh was', now - lastRefreshTime.current, 'ms ago');
+      return;
+    }
+    
+    isRefreshingTasks.current = true;
+    lastRefreshTime.current = now;
+    console.log('[refreshTasks] Starting refreshTasks - account_type:', user.account_type, 'user.id:', user.id, 'task_number:', user.task_number);
+    
+    // For training accounts, rebuild tasks from Supabase task_number (source of truth)
     if (user.account_type === 'training' && user.email) {
       try {
-        const emailKey = user.email.toLowerCase();
-        const localTasks = localStorage.getItem(`training_tasks_${emailKey}`);
-        if (localTasks) {
-          const parsedTasks = JSON.parse(localTasks);
-          if (parsedTasks && parsedTasks.length > 0) {
-            setTasks(parsedTasks);
-          } else {
-            setTasks([]);
-          }
-        } else {
-          setTasks([]);
+        // FETCH FRESH task_number from Supabase to avoid stale closure issues
+        const { data: freshAccount, error: fetchError } = await supabase
+          .from('training_accounts')
+          .select('task_number')
+          .eq('auth_user_id', user.id)
+          .single();
+        
+        if (fetchError) {
+          console.error('[refreshTasks] Error fetching fresh task_number:', fetchError);
         }
+        
+        const emailKey = user.email.toLowerCase();
+        const totalTasks = user.total_tasks || 45;
+        // Use FRESH task_number from Supabase (next task to complete)
+        const currentTaskNumber = freshAccount?.task_number || user.task_number || 1;
+        const completedTasks = Math.max(0, currentTaskNumber - 1);
+        
+        console.log('[refreshTasks] FRESH task_number from Supabase:', currentTaskNumber, 'completed:', completedTasks);
+        
+        // RESTORED: Original product-based commission with scaling to achieve $165.60 total
+        const RAW_COMMISSION_RATE = 0.01; // 1% base rate
+        const SCALE_FACTOR = 2.735; // Scale raw commissions to reach $165.60 total
+        
+        // Rebuild tasks array based on Supabase task_number
+        const rebuiltTasks: Task[] = Array.from({ length: totalTasks }, (_, i) => {
+          const taskNum = i + 1;
+          const product = ProductCatalogService.getProductForTask(taskNum, 'training');
+          
+          // Calculate scaled product-based commission (unique for each product)
+          const rawCommission = product.price * RAW_COMMISSION_RATE;
+          const scaledCommission = Math.round(rawCommission * SCALE_FACTOR * 100) / 100;
+          
+          let status: 'pending' | 'completed' | 'locked' = 'locked';
+          if (taskNum < currentTaskNumber) {
+            status = 'completed';
+          } else if (taskNum === currentTaskNumber) {
+            status = 'pending';
+          }
+          
+          return {
+            id: `task_${taskNum}`,
+            user_id: user.id,
+            task_number: taskNum,
+            title: product.name,
+            description: `Complete task ${taskNum}`,
+            reward: scaledCommission,
+            status,
+            created_at: new Date().toISOString(),
+            completed_at: status === 'completed' ? new Date().toISOString() : null,
+            task_set: 0
+          };
+        });
+        
+        setTasks(rebuiltTasks);
+        
+        // Update localStorage with rebuilt tasks
+        localStorage.setItem(`training_tasks_${emailKey}`, JSON.stringify(rebuiltTasks));
+        console.log('[refreshTasks] Rebuilt and saved training tasks, count:', rebuiltTasks.length, 'current task:', currentTaskNumber);
       } catch (error) {
-        console.error('Error loading training tasks from localStorage:', error);
-        setTasks([]);
+        console.error('[refreshTasks] Error rebuilding training tasks:', error);
+      } finally {
+        isRefreshingTasks.current = false;
       }
       return;
     }
     
     // For personal/admin accounts, load from Supabase
     try {
+      console.log('[refreshTasks] Loading personal/admin tasks from Supabase');
       const dbTasks = await SupabaseService.getUserTasks(user.id);
       setTasks((dbTasks || []).map(mapDatabaseTaskToTask));
+      console.log('[refreshTasks] Set tasks from Supabase, count:', (dbTasks || []).length);
     } catch (error) {
-      console.error('Error refreshing tasks:', error);
+      console.error('[refreshTasks] Error refreshing tasks:', error);
       setTasks([]);
+    } finally {
+      isRefreshingTasks.current = false;
     }
   }, [user]);
 
@@ -896,12 +1347,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   
   const refreshUser = async (): Promise<void> => {
     if (!user) return;
-    
-    // For training accounts, skip Supabase refresh (use localStorage state)
-    if (user.account_type === 'training') {
+
+    // For training accounts, fetch from training_accounts table (Supabase is source of truth)
+    if (user.account_type === 'training' && user.id) {
+      try {
+        const { data: trainingAccount, error } = await supabase
+          .from('training_accounts')
+          .select('*')
+          .eq('auth_user_id', user.id)
+          .single();
+
+        console.log('[DEBUG] Training account data:', trainingAccount);
+
+        if (trainingAccount && !error) {
+          console.log('[refreshUser] Training account data from Supabase:', trainingAccount);
+          const trainingTaskNumber = trainingAccount.task_number || 1;
+          const completedTasks = Math.max(0, trainingTaskNumber - 1);
+          const INITIAL_TRAINING_BALANCE = 1100;
+          setUser(prev => prev ? {
+            ...prev,
+            balance: trainingAccount.amount || 0,
+            total_earned: Math.max(0, (trainingAccount.amount || 0) - INITIAL_TRAINING_BALANCE),
+            task_number: trainingTaskNumber, // Next task to complete
+            tasks_completed: completedTasks, // Calculate from task_number
+            training_progress: completedTasks, // Use calculated value
+            training_completed: trainingAccount.completed || false
+          } : null);
+        }
+      } catch (error) {
+        console.error('[refreshUser] Error fetching training account:', error);
+      }
       return;
     }
-    
+
     // For personal/admin accounts, load from Supabase
     const dbUser = await SupabaseService.getUserById(user.id);
     if (dbUser) {
@@ -1072,6 +1550,86 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   // ===========================================
+  // WITHDRAWAL FUNCTIONS
+  // ===========================================
+  
+  const requestWithdrawal = async (
+    amount: number,
+    walletAddress: string,
+    walletType: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!user) {
+      return { success: false, error: 'Not authenticated' };
+    }
+    
+    // Validate withdrawal eligibility
+    if (!walletState.hasWallet) {
+      return { success: false, error: 'Please bind a wallet address first' };
+    }
+    
+    // Get current balance from user state
+    const currentBalance = user.balance || 0;
+    if (amount > currentBalance) {
+      return { success: false, error: `Insufficient balance. Available: $${currentBalance.toFixed(2)}` };
+    }
+    
+    if (amount <= 0) {
+      return { success: false, error: 'Amount must be greater than 0' };
+    }
+    
+    // Check if training account has completed both phases
+    const isTraining = user.account_type === 'training';
+    if (isTraining) {
+      // Get training account to check task completion
+      const training = await SupabaseService.getTrainingAccountByAuthId(user.id);
+      if (!training || training.task_number < 45) {
+        return { success: false, error: 'Please complete all training tasks before withdrawing' };
+      }
+      if (user.training_phase !== 2) {
+        return { success: false, error: 'Training not completed. Please finish Phase 2.' };
+      }
+    }
+    
+    // Create withdrawal request
+    const result = await SupabaseService.createWithdrawalRequest({
+      userId: user.id,
+      email: user.email,
+      amount,
+      walletAddress,
+      walletType,
+      currentBalance
+    });
+    
+    if (result.success) {
+      // Refresh user data to get updated state
+      await refreshUser();
+      
+      toast({
+        title: 'Withdrawal Requested',
+        description: `Your withdrawal request of $${amount.toFixed(2)} has been submitted for admin approval.`,
+      });
+    } else {
+      toast({
+        title: 'Withdrawal Failed',
+        description: result.error || 'Failed to submit withdrawal request',
+        variant: 'destructive'
+      });
+    }
+    
+    return result;
+  };
+  
+  const getWithdrawalHistory = async (): Promise<any[]> => {
+    if (!user) return [];
+    return await SupabaseService.getUserWithdrawals(user.id);
+  };
+  
+  const hasPendingWithdrawal = async (): Promise<boolean> => {
+    if (!user) return false;
+    return await SupabaseService.hasPendingWithdrawal(user.id);
+  };
+
+  // ===========================================
   // PROVIDER VALUE
   // ===========================================
   
@@ -1115,7 +1673,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Data
     refreshTransactions,
     addWallet,
-    refreshWallets
+    refreshWallets,
+    
+    // Withdrawals
+    requestWithdrawal,
+    getWithdrawalHistory,
+    hasPendingWithdrawal
   };
 
   return (

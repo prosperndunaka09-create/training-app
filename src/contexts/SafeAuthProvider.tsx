@@ -97,6 +97,27 @@ async function hydrateUserFromProfile(authUser: SupabaseAuthUser): Promise<{
   user: SafeAuthUser;
   isAdmin: boolean;
 }> {
+  // STEP 1: Check for training account first
+  const { data: trainingAccount, error: trainingError } = await supabase
+    .from('training_accounts')
+    .select('*')
+    .eq('auth_user_id', authUser.id)
+    .maybeSingle();
+
+  if (trainingAccount) {
+    console.log('[hydrateUserFromProfile] Found training account:', trainingAccount.email);
+    return {
+      user: {
+        id: authUser.id,
+        email: trainingAccount.email,
+        display_name: trainingAccount.email.split('@')[0] || 'Training User',
+        account_type: 'training',
+      },
+      isAdmin: false,
+    };
+  }
+
+  // STEP 2: Fallback to normal user account
   const { data, error } = await supabase
     .from('users')
     .select('id, email, display_name, account_type')
@@ -137,10 +158,31 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     let cancelled = false;
 
+    // Restore session on mount
+    const restoreSession = async () => {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      console.log('[SafeAuthProvider] Session restored on mount:', session ? 'Active' : 'None');
+      if (error) {
+        console.error('[SafeAuthProvider] Session restore error:', error);
+      }
+      if (session?.user && !cancelled) {
+        const hydrated = await hydrateUserFromProfile(session.user);
+        if (!cancelled) {
+          dispatch({ type: 'LOGIN_SUCCESS', payload: hydrated });
+        }
+      }
+    };
+
+    restoreSession();
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[SafeAuthProvider] Auth event:', event);
+      console.log('[SafeAuthProvider] Session:', session ? 'Active' : 'None');
+      
       void (async () => {
         if (cancelled) return;
         if (event === 'SIGNED_OUT') {
+          console.log('[SafeAuthProvider] User signed out');
           dispatch({ type: 'LOGOUT' });
           return;
         }
@@ -193,7 +235,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     void supabase.auth.signOut().catch((e) => console.error('SafeAuth signOut error', e));
     localStorage.removeItem('opt_user');
     dispatch({ type: 'LOGOUT' });
-    navigate('/');
+    // Skip redirect on admin route
+    if (!window.location.pathname.startsWith('/admin')) {
+      navigate('/');
+    }
   };
 
   const clearError = () => dispatch({ type: 'CLEAR_ERROR' });

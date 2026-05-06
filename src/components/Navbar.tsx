@@ -33,8 +33,16 @@ const Navbar: React.FC = () => {
   };
   
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const openLogin = () => {
+const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+const displayRole =
+  user?.account_type === 'admin'
+    ? 'Admin'
+    : user?.vip_level
+      ? `VIP${user.vip_level} Member`
+      : 'Member';
+
+const openLogin = () => {
     setAuthModalTab('login');
     setAuthModalOpen(true);
   };
@@ -72,7 +80,7 @@ const Navbar: React.FC = () => {
     icon: MessageCircle
   }];
 
-  const allNavItems = user?.email === 'admin@optimize.com' ? [
+  const allNavItems = user?.account_type === 'admin' ? [
     ...navItems,
     {
       id: 'admin',
@@ -136,7 +144,7 @@ const Navbar: React.FC = () => {
                           <p className="text-xs text-gray-500">{user?.email}</p>
                           <div className="flex items-center gap-1.5 mt-1.5">
                             <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-xs font-bold rounded-full" data-mixed-content="true">VIP{user?.vip_level}</span>
-                            <span className="text-xs text-gray-500">Member</span>
+                            <span className="text-xs text-gray-500">{displayRole}</span>
                           </div>
                         </div>
                         <div className="py-1">

@@ -71,11 +71,11 @@ const ProfileSection: React.FC = () => {
           <p className="text-xs text-gray-500 font-medium">Tasks Done</p>
           <p className="text-xl font-bold text-purple-400">
             {user?.account_type === 'training'
-              ? user?.training_completed === true || (user?.training_phase === 2 && (user?.training_progress || 0) >= 45)
+              ? user?.training_completed === true || (user?.training_phase === 2 && (user?.task_number ?? 1) >= 45)
                 ? 'TRAINING COMPLETE'
-                : user?.training_phase === 2 && (user?.training_progress || 0) === 0
+                : user?.training_phase === 2 && (user?.task_number ?? 1) === 0
                 ? 'SET 1 COMPLETED'
-                : `SET ${user?.training_phase || 1}/${user?.training_progress || 0}`
+                : `SET ${user?.training_phase || 1}/${user?.task_number ?? 1}`
               : `${completedCount}/35`}
           </p>
         </div>

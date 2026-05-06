@@ -1,21 +1,24 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { toast } from '@/components/ui/use-toast';
+import { TelegramService } from '@/services/telegramService';
+import { SupabaseService } from '@/services/supabaseService';
 import {
   LayoutDashboard, Users, ArrowDownToLine, RefreshCw, Shield, ChevronLeft,
-  BarChart3, Activity, LogIn, Headphones, Settings, UserPlus, Package,
+  BarChart3, Activity, LogIn, Headphones, Settings, UserPlus,
   AlertTriangle, DollarSign, CheckCircle, Search, ShoppingBag
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import AdminTasksManagement from './AdminTasksManagement';
+// AdminTasksManagement removed - using ProductCatalogManager (Supabase-based) instead
 import AdminCustomerService from './AdminCustomerService';
 import AdminControls from './AdminControls';
 import AccountCreation from './AccountCreation';
 import EnhancedPendingOrdersManager from './EnhancedPendingOrdersManager';
 import ProductCatalogManager from './ProductCatalogManager';
+import AdminUsers from './AdminUsers';
 import { sendTelegramNotification } from '@/lib/realtime';
 
 interface RealUser {
@@ -68,17 +71,17 @@ interface RealStats {
   flaggedAccounts: number;
 }
 
-const ADMIN_PASSWORD = '08167731393';
-
 const MainAdminPanel: React.FC = () => {
+  console.log("🚀 MainAdminPanel COMPONENT RENDERED");
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'withdrawals' | 'pending-orders' | 'customer-service' | 'tasks' | 'product-catalog' | 'admin-controls' | 'create-account'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'withdrawals' | 'pending-orders' | 'customer-service' | 'product-catalog' | 'admin-controls' | 'create-account'>('overview');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'error'>('connected');
+
+  console.log("🚀 Current isAuthenticated state:", isAuthenticated);
 
   const [stats, setStats] = useState<RealStats>({
     totalUsers: 0, totalPayouts: 0, pendingPayouts: 0, totalBalance: 0,
@@ -93,53 +96,74 @@ const MainAdminPanel: React.FC = () => {
   const [pendingOrderUsers, setPendingOrderUsers] = useState<RealUser[]>([]);
   const [pendingOrderSearch, setPendingOrderSearch] = useState('');
 
-  // Check auth status on mount and subscribe to real-time updates
+  // User action modals state
+  const [balanceModalOpen, setBalanceModalOpen] = useState(false);
+  const [balanceAction, setBalanceAction] = useState<'add' | 'reduce'>('add');
+  const [balanceAmount, setBalanceAmount] = useState('');
+  const [balanceReason, setBalanceReason] = useState('');
+  
+  const [vipModalOpen, setVipModalOpen] = useState(false);
+  const [newVipLevel, setNewVipLevel] = useState<number>(1);
+  
+  const [userDetailsModalOpen, setUserDetailsModalOpen] = useState(false);
+  
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+
+
   useEffect(() => {
-  const checkSession = async () => {
-    const { data: sessionData } = await supabase.auth.getSession();
-
-    console.log('[MainAdmin] ADMIN SESSION:', sessionData.session ? 'Authenticated' : 'No session');
-    console.log('[MainAdmin] Session data:', sessionData);
-
-    // Allow access if no session (user needs to log in via admin password)
-    if (!sessionData.session) {
-      return;
-    }
-
-    // If session exists, check if user is admin
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user && user.email !== 'admin@nelly2026.com') {
-      window.location.href = '/';
-      return;
-    }
-  };
-
-  checkSession();
-
-  // Listen for auth state changes
-  const { data: { subscription: authSubscription } } =
-    supabase.auth.onAuthStateChange((event, session) => {
-      console.log('[MainAdmin] Auth state changed:', session ? 'Authenticated' : 'No session');
-    });
-
-  // Subscribe to real-time users changes
-  const usersSubscription = supabase
-    .channel('users-changes')
-    .on('postgres_changes',
-      { event: '*', schema: 'public', table: 'users' },
-      (payload) => {
-        console.log('[MainAdmin] Real-time update received:', payload);
-        loadData();
+    const checkAuth = async () => {
+      console.log("ADMIN INIT: Checking Supabase Auth session");
+      
+      const { data: { session }, error } = await supabase.auth.getSession();
+      console.log("ADMIN INIT: Supabase session:", session ? 'Found' : 'Not found');
+      
+      if (error) {
+        console.error("ADMIN INIT: Session check error:", error);
+        setIsAuthenticated(false);
+        setIsInitialized(true);
+        navigate('/');
+        return;
       }
-    )
-    .subscribe();
 
-  return () => {
-    authSubscription.unsubscribe();
-    usersSubscription.unsubscribe();
-  };
+      if (!session) {
+        console.log("ADMIN INIT: No session found, redirecting to main site to login");
+        setIsAuthenticated(false);
+        setIsInitialized(true);
+        navigate('/');
+        return;
+      }
 
-}, []);
+      // Verify user is admin from database
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('account_type, user_status')
+        .eq('id', session.user.id)
+        .single();
+
+      if (userError || !userData) {
+        console.error("ADMIN INIT: User data fetch error:", userError);
+        setIsAuthenticated(false);
+        setIsInitialized(true);
+        navigate('/');
+        return;
+      }
+
+      if (userData.account_type !== 'admin') {
+        console.log("ADMIN INIT: User is not admin, account_type:", userData.account_type);
+        setIsAuthenticated(false);
+        setIsInitialized(true);
+        navigate('/');
+        return;
+      }
+
+      console.log("ADMIN INIT: User is admin, authenticated");
+      setIsAuthenticated(true);
+      setIsInitialized(true);
+      loadData();
+    };
+
+    checkAuth();
+  }, [navigate]);
 
     
   
@@ -147,18 +171,19 @@ const MainAdminPanel: React.FC = () => {
   const loadData = async (showRefreshToast = false) => {
     setIsLoading(true);
     console.log('[MainAdmin] Starting data load...');
-    
+    console.log('[MainAdmin] Loading state set to true');
+
     // Add timeout to prevent infinite loading
-    // const timeoutId = setTimeout(() => {
-    //   console.error('[MainAdmin] Data load timed out after 30 seconds');
-    //   setIsLoading(false);
-    //   setIsRefreshing(false);
-    //   toast({ 
-    //     title: 'Error', 
-    //     description: 'Data load timed out. Please check your connection and try again.',
-    //     variant: 'destructive'
-    //   });
-    // }, 30000);
+    const timeoutId = setTimeout(() => {
+      console.error('[MainAdmin] Data load timed out after 30 seconds');
+      setIsLoading(false);
+      setIsRefreshing(false);
+      toast({
+        title: 'Error',
+        description: 'Data load timed out. Please check your connection and try again.',
+        variant: 'destructive'
+      });
+    }, 30000);
     
     try {
       console.log('[MainAdmin] Loading data from Supabase...');
@@ -176,11 +201,13 @@ const MainAdminPanel: React.FC = () => {
       if (connectionError) {
         console.error('[MainAdmin] Connection test failed:', connectionError);
         setConnectionStatus('error');
-        
+
+        clearTimeout(timeoutId);
         setIsLoading(false);
         setIsRefreshing(false);
-        toast({ 
-          title: 'Connection Error', 
+        console.log('[MainAdmin] Loading state reset due to connection error');
+        toast({
+          title: 'Connection Error',
           description: 'Cannot connect to database. Please check your internet connection.',
           variant: 'destructive'
         });
@@ -286,43 +313,25 @@ const MainAdminPanel: React.FC = () => {
       });
 
       if (showRefreshToast && users.length > 0) {
-        toast({ 
-          title: 'Success', 
-          description: `Loaded ${users.length} users from Supabase` 
+        toast({
+          title: 'Success',
+          description: `Loaded ${users.length} users from Supabase`
         });
       }
+
+      console.log('[MainAdmin] Data load completed successfully');
     } catch (err) {
-      console.error('Failed to load admin data:', err);
-      toast({ 
-        title: 'Error', 
+      console.error('[MainAdmin] Data load failed:', err);
+      toast({
+        title: 'Error',
         description: 'Failed to load admin data: ' + (err as Error).message,
         variant: 'destructive'
       });
     } finally {
-      
+      clearTimeout(timeoutId);
       setIsLoading(false);
       setIsRefreshing(false);
-    }
-  };
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanPassword = adminPassword.trim();
-    
-    if (cleanPassword === ADMIN_PASSWORD) {
-      setIsAuthenticated(true);
-      localStorage.setItem('main_admin_authenticated', 'true');
-      loadData();
-      toast({
-        title: 'Welcome',
-        description: 'Admin access granted',
-      });
-    } else {
-      toast({
-        title: 'Authentication Failed',
-        description: 'Invalid admin password',
-        variant: 'destructive',
-      });
+      console.log('[MainAdmin] Loading state reset to false');
     }
   };
 
@@ -331,45 +340,39 @@ const MainAdminPanel: React.FC = () => {
     loadData(true);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Sign out from Supabase Auth
+    await supabase.auth.signOut();
     setIsAuthenticated(false);
-    localStorage.removeItem('main_admin_authenticated');
-    setAdminPassword('');
-    toast({
-      title: 'Logged Out',
-      description: 'You have been logged out of admin panel',
-    });
+    navigate('/');
   };
 
   const handleApproveWithdrawal = async (withdrawalId: string) => {
     setProcessingIds(prev => new Set(prev).add(withdrawalId));
     try {
-      const { error } = await supabase
-        .from('withdrawals')
-        .update({ 
-          status: 'completed', 
-          processed_at: new Date().toISOString(),
-          processed_by: 'admin'
-        })
-        .eq('id', withdrawalId);
+      // Use SupabaseService to approve withdrawal (includes balance update and transaction creation)
+      const result = await SupabaseService.approveWithdrawal(withdrawalId, user?.id);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to approve withdrawal');
+      }
 
-      if (error) throw error;
-
+      // Update local state
       setWithdrawals(prev => prev.map(w => 
-        w.id === withdrawalId ? { ...w, status: 'completed' as const, processed_at: new Date().toISOString() } : w
+        w.id === withdrawalId ? { ...w, status: 'approved' as const, processed_at: new Date().toISOString() } : w
       ));
 
       toast({
         title: 'Withdrawal Approved',
-        description: 'Withdrawal has been processed successfully',
+        description: 'Withdrawal has been processed successfully and balance deducted',
       });
       
       // Refresh stats
       loadData();
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: 'Error',
-        description: 'Failed to approve withdrawal',
+        description: error.message || 'Failed to approve withdrawal',
         variant: 'destructive',
       });
     } finally {
@@ -384,31 +387,29 @@ const MainAdminPanel: React.FC = () => {
   const handleRejectWithdrawal = async (withdrawalId: string) => {
     setProcessingIds(prev => new Set(prev).add(withdrawalId));
     try {
-      const { error } = await supabase
-        .from('withdrawals')
-        .update({ 
-          status: 'rejected', 
-          processed_at: new Date().toISOString(),
-          processed_by: 'admin'
-        })
-        .eq('id', withdrawalId);
+      // Use SupabaseService to reject withdrawal (includes transaction creation)
+      const result = await SupabaseService.rejectWithdrawal(withdrawalId, user?.id, 'Rejected by admin');
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to reject withdrawal');
+      }
 
-      if (error) throw error;
-
+      // Update local state
       setWithdrawals(prev => prev.map(w => 
         w.id === withdrawalId ? { ...w, status: 'rejected' as const, processed_at: new Date().toISOString() } : w
       ));
 
       toast({
         title: 'Withdrawal Rejected',
-        description: 'Withdrawal has been rejected',
+        description: 'Withdrawal has been rejected successfully. Funds remain available to user.',
       });
       
+      // Refresh stats
       loadData();
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: 'Error',
-        description: 'Failed to reject withdrawal',
+        description: error.message || 'Failed to reject withdrawal',
         variant: 'destructive',
       });
     } finally {
@@ -422,12 +423,15 @@ const MainAdminPanel: React.FC = () => {
 
   const handleFreezeUser = async (userId: string) => {
     try {
-      const { error } = await supabase
-        .from('users')
-        .update({ is_frozen: true, frozen_reason: 'Administrative action' })
-        .eq('id', userId);
+      const response = await fetch('/api/admin-user-freeze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, action: 'freeze' })
+      });
 
-      if (error) throw error;
+      const result = await response.json();
+
+      if (!response.ok) throw new Error(result.error || 'Failed to freeze user');
 
       setUsers(prev => prev.map(u => 
         u.id === userId ? { ...u, is_frozen: true, account_status: 'suspended' as const } : u
@@ -448,12 +452,15 @@ const MainAdminPanel: React.FC = () => {
 
   const handleUnfreezeUser = async (userId: string) => {
     try {
-      const { error } = await supabase
-        .from('users')
-        .update({ is_frozen: false, frozen_reason: null })
-        .eq('id', userId);
+      const response = await fetch('/api/admin-user-freeze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, action: 'unfreeze' })
+      });
 
-      if (error) throw error;
+      const result = await response.json();
+
+      if (!response.ok) throw new Error(result.error || 'Failed to unfreeze user');
 
       setUsers(prev => prev.map(u => 
         u.id === userId ? { ...u, is_frozen: false, account_status: 'active' as const } : u
@@ -467,6 +474,134 @@ const MainAdminPanel: React.FC = () => {
       toast({
         title: 'Error',
         description: 'Failed to unfreeze user account',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleBalanceUpdate = async () => {
+    if (!selectedUser || !balanceAmount) return;
+
+    try {
+      const amount = parseFloat(balanceAmount);
+      if (isNaN(amount) || amount <= 0) {
+        toast({
+          title: 'Invalid Amount',
+          description: 'Please enter a valid positive number',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const response = await fetch('/api/admin-user-balance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: selectedUser.id,
+          action: balanceAction,
+          amount,
+          reason: balanceReason
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) throw new Error(result.error || 'Failed to update balance');
+
+      // Update local state
+      setUsers(prev => prev.map(u => 
+        u.id === selectedUser.id ? { ...u, balance: result.newBalance } : u
+      ));
+
+      toast({
+        title: 'Balance Updated',
+        description: `Successfully ${balanceAction === 'add' ? 'added' : 'reduced'} $${amount}`,
+      });
+
+      // Close modal and reset form
+      setBalanceModalOpen(false);
+      setBalanceAmount('');
+      setBalanceReason('');
+      setSelectedUser(null);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: (error as Error).message || 'Failed to update balance',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleVipUpdate = async () => {
+    if (!selectedUser) return;
+
+    try {
+      const response = await fetch('/api/admin-user-vip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: selectedUser.id,
+          vipLevel: newVipLevel
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) throw new Error(result.error || 'Failed to update VIP level');
+
+      // Update local state
+      setUsers(prev => prev.map(u => 
+        u.id === selectedUser.id ? { ...u, vip_level: result.newVipLevel } : u
+      ));
+
+      toast({
+        title: 'VIP Level Updated',
+        description: `Updated from VIP${result.previousVipLevel} to VIP${result.newVipLevel}`,
+      });
+
+      // Close modal
+      setVipModalOpen(false);
+      setSelectedUser(null);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: (error as Error).message || 'Failed to update VIP level',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleDeleteUser = async () => {
+    if (!selectedUser) return;
+
+    try {
+      const response = await fetch('/api/admin-user-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: selectedUser.id
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) throw new Error(result.error || 'Failed to delete user');
+
+      // Remove from local state
+      setUsers(prev => prev.filter(u => u.id !== selectedUser.id));
+
+      toast({
+        title: 'User Deleted',
+        description: 'User has been soft deleted successfully',
+      });
+
+      // Close modal
+      setDeleteConfirmOpen(false);
+      setSelectedUser(null);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: (error as Error).message || 'Failed to delete user',
         variant: 'destructive',
       });
     }
@@ -590,61 +725,35 @@ const MainAdminPanel: React.FC = () => {
       )
     : pendingOrderUsers;
 
-  // Login Screen
-  if (!isAuthenticated) {
+  // Block render until initialized
+  if (!isInitialized) {
     return (
       <div className="min-h-screen bg-[#060a14] flex items-center justify-center px-4">
-        <div className="max-w-md w-full">
-          <div className="text-center mb-8">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-500/30">
-              <Shield size={32} className="text-white" />
-            </div>
-            <h1 className="text-2xl font-bold text-white mb-2">Admin Panel</h1>
-            <p className="text-sm text-gray-500">Enter admin credentials to continue</p>
-          </div>
-
-          <form onSubmit={handleLogin} className="bg-white/[0.03] border border-white/[0.06] rounded-2xl p-6 space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5">Admin Password</label>
-              <div className="relative">
-                <Shield size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="Enter admin password"
-                  className="w-full pl-10 pr-10 py-3 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/30 transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
-                >
-                  {showPassword ? 'Hide' : 'Show'}
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/25"
-            >
-              <LogIn size={16} />
-              Access Dashboard
-            </button>
-
-            <button
-              type="button"
-              onClick={() => navigate('/')}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm text-gray-400 hover:text-white transition-colors"
-            >
-              <ChevronLeft size={14} />
-              Back to Main Site
-            </button>
-          </form>
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-400">Loading...</p>
         </div>
       </div>
     );
+  }
+
+  // Show loading while checking auth
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen bg-[#060a14] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-500/30 animate-pulse">
+            <Shield size={32} className="text-white" />
+          </div>
+          <p className="text-gray-400">Verifying admin access...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If not authenticated after initialization, redirect happens in useEffect
+  if (!isAuthenticated) {
+    return null;
   }
 
   return (
@@ -718,7 +827,6 @@ const MainAdminPanel: React.FC = () => {
               { id: 'withdrawals', label: 'Withdrawals', icon: ArrowDownToLine },
               { id: 'pending-orders', label: 'Pending Orders', icon: AlertTriangle },
               { id: 'customer-service', label: 'Customer Service', icon: Headphones },
-              { id: 'tasks', label: 'Tasks', icon: Package },
               { id: 'product-catalog', label: 'Product Catalog', icon: ShoppingBag },
               { id: 'admin-controls', label: 'Admin Controls', icon: Settings },
               { id: 'create-account', label: 'Create Account', icon: UserPlus },
@@ -742,7 +850,7 @@ const MainAdminPanel: React.FC = () => {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {isLoading && activeTab !== 'tasks' && activeTab !== 'customer-service' && activeTab !== 'admin-controls' && activeTab !== 'create-account' && activeTab !== 'product-catalog' ? (
+        {isLoading && activeTab !== 'customer-service' && activeTab !== 'admin-controls' && activeTab !== 'create-account' && activeTab !== 'product-catalog' ? (
           <div className="flex items-center justify-center h-64">
             <div className="text-center">
               <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin mx-auto mb-4" />
@@ -887,6 +995,14 @@ const MainAdminPanel: React.FC = () => {
 
             {/* Users Tab */}
             {activeTab === 'users' && (
+              <>
+                {console.log('[MainAdmin] Rendering USERS tab, users count:', users.length)}
+                <AdminUsers onLogout={handleLogout} />
+              </>
+            )}
+
+            {/* OLD Users Tab - DISABLED, using AdminUsers component instead */}
+            {false && activeTab === 'users' && (
               <div className="space-y-6">
                 <div className="flex items-center justify-between">
                   <div>
@@ -941,22 +1057,77 @@ const MainAdminPanel: React.FC = () => {
                               </Badge>
                             </td>
                             <td className="px-4 py-3">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1 flex-wrap">
+                                <button
+                                  onClick={() => {
+                                    setSelectedUser(user);
+                                    setBalanceAction('add');
+                                    setBalanceModalOpen(true);
+                                  }}
+                                  className="px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded text-xs hover:bg-emerald-500/30 transition-colors"
+                                  title="Add Balance"
+                                >
+                                  ➕
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSelectedUser(user);
+                                    setBalanceAction('reduce');
+                                    setBalanceModalOpen(true);
+                                  }}
+                                  className="px-2 py-1 bg-orange-500/20 text-orange-400 rounded text-xs hover:bg-orange-500/30 transition-colors"
+                                  title="Reduce Balance"
+                                >
+                                  ➖
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSelectedUser(user);
+                                    setNewVipLevel(user.vip_level);
+                                    setVipModalOpen(true);
+                                  }}
+                                  className="px-2 py-1 bg-purple-500/20 text-purple-400 rounded text-xs hover:bg-purple-500/30 transition-colors"
+                                  title="Set VIP Level"
+                                >
+                                  👑
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSelectedUser(user);
+                                    setUserDetailsModalOpen(true);
+                                  }}
+                                  className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs hover:bg-blue-500/30 transition-colors"
+                                  title="View Details"
+                                >
+                                  👁
+                                </button>
                                 {user.is_frozen ? (
                                   <button
                                     onClick={() => handleUnfreezeUser(user.id)}
                                     className="px-2 py-1 bg-green-500/20 text-green-400 rounded text-xs hover:bg-green-500/30 transition-colors"
+                                    title="Unfreeze"
                                   >
-                                    Unfreeze
+                                    ❄
                                   </button>
                                 ) : (
                                   <button
                                     onClick={() => handleFreezeUser(user.id)}
-                                    className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs hover:bg-red-500/30 transition-colors"
+                                    className="px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded text-xs hover:bg-cyan-500/30 transition-colors"
+                                    title="Freeze"
                                   >
-                                    Freeze
+                                    ❄
                                   </button>
                                 )}
+                                <button
+                                  onClick={() => {
+                                    setSelectedUser(user);
+                                    setDeleteConfirmOpen(true);
+                                  }}
+                                  className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-xs hover:bg-red-500/30 transition-colors"
+                                  title="Delete User"
+                                >
+                                  🗑
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -967,6 +1138,215 @@ const MainAdminPanel: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {/* OLD User Modals - DISABLED, using AdminUsers component instead */}
+            {false && <>
+            {/* Balance Management Modal */}
+            {balanceModalOpen && selectedUser && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 w-full max-w-md">
+                  <h3 className="text-xl font-bold text-white mb-4">
+                    {balanceAction === 'add' ? 'Add Balance' : 'Reduce Balance'}
+                  </h3>
+                  <p className="text-sm text-slate-400 mb-4">
+                    User: {selectedUser.display_name || selectedUser.email}
+                  </p>
+                  <p className="text-sm text-slate-400 mb-4">
+                    Current Balance: ${selectedUser.balance?.toFixed(2) || '0.00'}
+                  </p>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1.5">Amount (USD)</label>
+                      <input
+                        type="number"
+                        value={balanceAmount}
+                        onChange={(e) => setBalanceAmount(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter amount"
+                        min="0"
+                        step="0.01"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1.5">Reason</label>
+                      <input
+                        type="text"
+                        value={balanceReason}
+                        onChange={(e) => setBalanceReason(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter reason (optional)"
+                      />
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleBalanceUpdate}
+                        className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                      >
+                        {balanceAction === 'add' ? 'Add' : 'Reduce'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setBalanceModalOpen(false);
+                          setBalanceAmount('');
+                          setBalanceReason('');
+                          setSelectedUser(null);
+                        }}
+                        className="flex-1 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* VIP Level Modal */}
+            {vipModalOpen && selectedUser && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 w-full max-w-md">
+                  <h3 className="text-xl font-bold text-white mb-4">Set VIP Level</h3>
+                  <p className="text-sm text-slate-400 mb-4">
+                    User: {selectedUser.display_name || selectedUser.email}
+                  </p>
+                  <p className="text-sm text-slate-400 mb-4">
+                    Current VIP: VIP{selectedUser.vip_level}
+                  </p>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1.5">VIP Level</label>
+                      <select
+                        value={newVipLevel}
+                        onChange={(e) => setNewVipLevel(parseInt(e.target.value))}
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value={1}>VIP1 Bronze</option>
+                        <option value={2}>VIP2 Silver</option>
+                        <option value={3}>VIP3 Gold</option>
+                        <option value={4}>VIP4 Platinum</option>
+                        <option value={5}>VIP5 Diamond</option>
+                      </select>
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleVipUpdate}
+                        className="flex-1 px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors"
+                      >
+                        Update VIP
+                      </button>
+                      <button
+                        onClick={() => {
+                          setVipModalOpen(false);
+                          setSelectedUser(null);
+                        }}
+                        className="flex-1 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* User Details Modal */}
+            {userDetailsModalOpen && selectedUser && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 w-full max-w-lg">
+                  <h3 className="text-xl font-bold text-white mb-4">User Details</h3>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Name</label>
+                        <p className="text-sm text-white">{selectedUser.display_name || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Email</label>
+                        <p className="text-sm text-white">{selectedUser.email}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Balance</label>
+                        <p className="text-sm text-emerald-400">${selectedUser.balance?.toFixed(2) || '0.00'}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">VIP Level</label>
+                        <p className="text-sm text-white">VIP{selectedUser.vip_level}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Account Type</label>
+                        <p className="text-sm text-white">{selectedUser.account_type}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Status</label>
+                        <p className={`text-sm ${selectedUser.is_frozen ? 'text-red-400' : 'text-green-400'}`}>
+                          {selectedUser.is_frozen ? 'Frozen' : 'Active'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Tasks Completed</label>
+                        <p className="text-sm text-white">{selectedUser.tasks_completed || 0}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Total Earned</label>
+                        <p className="text-sm text-white">${selectedUser.total_earned?.toFixed(2) || '0.00'}</p>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Created Date</label>
+                      <p className="text-sm text-white">{new Date(selectedUser.created_at).toLocaleDateString()}</p>
+                    </div>
+                    <div className="flex gap-3 pt-4">
+                      <button
+                        onClick={() => {
+                          setUserDetailsModalOpen(false);
+                          setSelectedUser(null);
+                        }}
+                        className="flex-1 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {deleteConfirmOpen && selectedUser && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 w-full max-w-md">
+                  <h3 className="text-xl font-bold text-white mb-4">Delete User</h3>
+                  <p className="text-sm text-slate-400 mb-4">
+                    Are you sure you want to delete this user?
+                  </p>
+                  <div className="bg-slate-700/50 rounded-lg p-3 mb-4">
+                    <p className="text-sm text-white">{selectedUser.display_name || selectedUser.email}</p>
+                    <p className="text-xs text-slate-400">{selectedUser.email}</p>
+                  </div>
+                  <p className="text-xs text-orange-400 mb-4">
+                    This will soft delete the user. They will be marked as deleted but data will be preserved.
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handleDeleteUser}
+                      className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                    >
+                      Delete
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDeleteConfirmOpen(false);
+                        setSelectedUser(null);
+                      }}
+                      className="flex-1 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            </>}
 
             {/* Withdrawals Tab */}
             {activeTab === 'withdrawals' && (
@@ -1070,12 +1450,7 @@ const MainAdminPanel: React.FC = () => {
               </div>
             )}
 
-            {/* Tasks Tab */}
-            {activeTab === 'tasks' && (
-              <AdminTasksManagement />
-            )}
-
-            {/* Product Catalog Tab */}
+            {/* Product Catalog Tab - Uses Supabase training_products/personal_products tables */}
             {activeTab === 'product-catalog' && (
               <ProductCatalogManager />
             )}

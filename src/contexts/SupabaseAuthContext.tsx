@@ -248,7 +248,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     SecurityManager.destroySession();
     localStorage.removeItem('opt_user');
     dispatch({ type: 'LOGOUT' });
-    navigate('/');
+    // Skip redirect on admin route
+    if (!window.location.pathname.startsWith('/admin')) {
+      navigate('/');
+    }
   };
 
   // Clear error

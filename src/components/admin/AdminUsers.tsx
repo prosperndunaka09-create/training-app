@@ -63,6 +63,7 @@ interface AdminUsersProps {
 }
 
 const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
+  console.log('[AdminUsers] COMPONENT MOUNTED');
   const [users, setUsers] = useState<User[]>([]);
   const [filteredUsers, setFilteredUsers] = useState<User[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -494,6 +495,7 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
             </div>
           ) : (
             <div className="overflow-x-auto">
+              
               <table className="w-full text-sm text-left">
                 <thead>
                   <tr className="border-b border-slate-700">
@@ -504,7 +506,7 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                     <th className="px-6 py-3 text-slate-300 font-medium">Balance</th>
                     <th className="px-6 py-3 text-slate-300 font-medium">Earnings</th>
                     <th className="px-6 py-3 text-slate-300 font-medium">Status</th>
-                    <th className="px-6 py-3 text-slate-300 font-medium">Actions</th>
+                    <th className="px-6 py-3 text-slate-300 font-medium min-w-[300px]">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -545,8 +547,9 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                       <td className="px-6 py-4">
                         {getStatusBadge(user.status || 'active')}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center space-x-2">
+                      <td className="px-6 py-4 min-w-[300px]">
+                        
+                        <div className="flex items-center gap-2 flex-wrap">
                           <Button
                             size="sm"
                             variant="outline"
@@ -554,10 +557,11 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                               setSelectedUser(user);
                               setShowUserDetails(true);
                             }}
-                            className="border-blue-600 text-blue-400 hover:bg-blue-600/10"
+                            className="border-blue-600 text-blue-400 hover:bg-blue-600/10 px-2"
                             title="View Details"
                           >
-                            <Eye className="w-4 h-4" />
+                            <Eye className="w-4 h-4 mr-1" />
+                            <span className="text-xs">View</span>
                           </Button>
                           <Button
                             size="sm"
@@ -568,10 +572,11 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                               setBalanceReason('');
                               setShowBalanceModal(true);
                             }}
-                            className="border-green-600 text-green-400 hover:bg-green-600/10"
+                            className="border-green-600 text-green-400 hover:bg-green-600/10 px-2"
                             title="Update Balance"
                           >
-                            <DollarSign className="w-4 h-4" />
+                            <DollarSign className="w-4 h-4 mr-1" />
+                            <span className="text-xs">Balance</span>
                           </Button>
                           <Button
                             size="sm"
@@ -581,10 +586,11 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                               setVipLevel(user.vip_level ?? 1);
                               setShowVipModal(true);
                             }}
-                            className="border-yellow-600 text-yellow-400 hover:bg-yellow-600/10"
+                            className="border-yellow-600 text-yellow-400 hover:bg-yellow-600/10 px-2"
                             title="Update VIP Level"
                           >
-                            <Crown className="w-4 h-4" />
+                            <Crown className="w-4 h-4 mr-1" />
+                            <span className="text-xs">VIP</span>
                           </Button>
                           <Button
                             size="sm"
@@ -596,10 +602,11 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                                 handleActivateUser(user.id, user.email);
                               }
                             }}
-                            className={(user.status || 'active') === 'active' ? 'border-orange-600 text-orange-400 hover:bg-orange-600/10' : 'border-green-600 text-green-400 hover:bg-green-600/10'}
+                            className={(user.status || 'active') === 'active' ? 'border-orange-600 text-orange-400 hover:bg-orange-600/10 px-2' : 'border-green-600 text-green-400 hover:bg-green-600/10 px-2'}
                             title={(user.status || 'active') === 'active' ? 'Suspend User' : 'Activate User'}
                           >
-                            {(user.status || 'active') === 'active' ? <Ban className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                            {(user.status || 'active') === 'active' ? <Ban className="w-4 h-4 mr-1" /> : <CheckCircle className="w-4 h-4 mr-1" />}
+                            <span className="text-xs">{(user.status || 'active') === 'active' ? 'Freeze' : 'Activate'}</span>
                           </Button>
                           <Button
                             size="sm"
@@ -608,10 +615,11 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
                               setUserToDelete(user);
                               setShowDeleteConfirm(true);
                             }}
-                            className="border-red-600 text-red-400 hover:bg-red-600/10"
+                            className="border-red-600 text-red-400 hover:bg-red-600/10 px-2"
                             title="Delete User"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4 mr-1" />
+                            <span className="text-xs">Delete</span>
                           </Button>
                         </div>
                       </td>
@@ -904,3 +912,4 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
     </div>
   );
 };
+export default AdminUsers;

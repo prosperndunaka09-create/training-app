@@ -59,122 +59,206 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
 
     setIsCreating(true);
     try {
-      // Check if email already exists
-      const existingUser = await SupabaseService.getUserByEmail(trainingEmail.toLowerCase());
-      if (existingUser) {
-        toast.error('Email already exists in database');
+      // Validate referral code is provided
+      if (!normalizedTrainingReferral) {
+        toast.error('User referral code is required to create a training account');
+        setIsCreating(false);
         return;
       }
 
-      // Generate training referral code
-      const referralCode = generateReferralCode();
+      // Validate email and password are provided
+      if (!trainingEmail || !trainingPassword) {
+        toast.error('Email and password are required for training account');
+        setIsCreating(false);
+        return;
+      }
 
-      // Create training account in Supabase
-      const newUser = await SupabaseService.createUser({
+      // STEP 1: Find the existing user in public.users using the provided referral_code (for tracking)
+      console.log('STEP 1: Finding existing user by referral_code:', normalizedTrainingReferral);
+      const { data: existingUser, error: userLookupError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('referral_code', normalizedTrainingReferral)
+        .single();
+
+      if (userLookupError || !existingUser) {
+        console.error('[createTrainingAccount] User not found with referral_code:', userLookupError);
+        toast.error(`No user found with referral code: ${normalizedTrainingReferral}`);
+        setIsCreating(false);
+        return;
+      }
+
+      console.log('STEP 1: Existing user found for tracking:', existingUser.id, existingUser.email);
+      const trackingReferralCode = existingUser.referral_code;
+
+      // STEP 2: Create NEW Supabase Auth user for the training account
+      console.log('STEP 2: Creating Supabase Auth user for training account');
+      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
         email: trainingEmail.toLowerCase(),
         password: trainingPassword,
-        display_name: trainingName,
-        account_type: 'training',
-        vip_level: 2,
-        tasks_completed: 0,
-        tasks_total: 45,
-        balance: 1100,
-        total_earned: 0,
-        referral_code: referralCode,
-        referred_by: normalizedTrainingReferral,
-        training_completed: false,
-        training_phase: 1,
-        trigger_task_number: null,
-        has_pending_order: false,
-        pending_amount: 0,
-        is_negative_balance: false,
-        profit_added: false,
-        status: 'active'
+        email_confirm: true,
+        user_metadata: {
+          display_name: trainingName,
+          account_type: 'training',
+          linked_to_user_id: existingUser.id
+        }
       });
 
-      if (!newUser) {
-        toast.error('Failed to create training account');
+      if (authError || !authData.user) {
+        console.error('[createTrainingAccount] Supabase auth creation error:', authError);
+        toast.error(authError?.message || 'Failed to create auth user');
+        setIsCreating(false);
         return;
       }
 
-      // Save training account to localStorage for login
-      const emailKey = trainingEmail.toLowerCase();
-      const accountData = {
-        email: emailKey,
-        password: trainingPassword,
-        assignedTo: trainingName,
-        userReferralCode: trainingReferral,
-        trainingReferralCode: referralCode,
-        userEmail: emailKey,
-        createdAt: new Date().toISOString()
-      };
+      console.log('STEP 2: Auth user created:', authData.user.id);
+      const authUserId = authData.user.id;
 
-      console.log('[SupabaseAccountCreation] About to save training_account to localStorage');
-      console.log('[SupabaseAccountCreation] Key:', `training_account_${emailKey}`);
-      console.log('[SupabaseAccountCreation] Data to save:', accountData);
-      console.log('[SupabaseAccountCreation] Data has email:', !!accountData.email);
-      console.log('[SupabaseAccountCreation] Data has password:', !!accountData.password);
+      // STEP 3: Insert into public.users table for the training account
+      console.log('STEP 3: Inserting into public.users for training account');
+      const { error: userInsertError } = await supabase
+        .from('users')
+        .upsert({
+          id: authUserId,
+          email: trainingEmail.toLowerCase(),
+          display_name: trainingName,
+          phone: null,
+          account_type: 'training',
+          user_status: 'active',
+          vip_level: 2,
+          balance: 1100,
+          total_earned: 0,
+          referral_code: trackingReferralCode, // Use existing user's referral code for tracking
+          referred_by: existingUser.id, // Link to the existing user
+          training_completed: false,
+          training_progress: 0,
+          training_phase: 1,
+          tasks_completed: 0,
+          trigger_task_number: null,
+          has_pending_order: false,
+          pending_amount: 0,
+          is_negative_balance: false,
+          profit_added: false,
+          created_at: new Date().toISOString()
+        }, {
+          onConflict: 'id',
+          ignoreDuplicates: false
+        });
 
-      try {
-        localStorage.setItem(`training_account_${emailKey}`, JSON.stringify(accountData));
-        console.log('[SupabaseAccountCreation] localStorage.setItem called successfully');
-        const saved = localStorage.getItem(`training_account_${emailKey}`);
-        console.log('[SupabaseAccountCreation] Verification - saved data exists:', !!saved);
-        console.log('[SupabaseAccountCreation] Verification - saved data length:', saved?.length);
-      } catch (error) {
-        console.error('[SupabaseAccountCreation] Failed to save training_account to localStorage:', error);
+      if (userInsertError) {
+        console.error('[createTrainingAccount] Public users upsert error:', userInsertError);
+        toast.error(`Failed to create user profile: ${userInsertError.message || 'Unknown error'}`);
+        setIsCreating(false);
+        return;
       }
+      console.log('STEP 3: public.users inserted');
 
-      // Create training tasks
-      const rewardPatterns = [0.7, 1.6, 2.5, 6.4, 7.2];
-      const trainingTasks = Array.from({ length: 45 }, (_, i) => {
-        const patternIndex = i % rewardPatterns.length;
-        const baseReward = rewardPatterns[patternIndex];
-        
-        // Add small variation to make it realistic (±0.2)
-        const variation = (Math.random() - 0.5) * 0.4;
-        const finalReward = Math.max(0.5, baseReward + variation);
-        
-        return {
-          user_id: newUser.id,
-          task_number: i + 1,
-          title: `Training Task ${i + 1}`,
-          description: `Complete training task ${i + 1} for phase 1`,
-          status: i === 0 ? ('pending' as const) : ('locked' as const),
-          reward: Math.round(finalReward * 100) / 100,
-          task_set: 0
-        };
-      });
+      // STEP 4: Check if training account already exists for this auth_user_id
+      console.log('STEP 4: checking if training account exists for user:', authUserId);
+      const { data: existingTrainingAccount, error: checkTrainingError } = await supabase
+        .from('training_accounts')
+        .select('*')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle();
 
-      await SupabaseService.createTasks(trainingTasks);
+      let trainingAccount;
 
-      // Save training tasks to localStorage
-      localStorage.setItem(`training_tasks_${emailKey}`, JSON.stringify(trainingTasks));
+      if (existingTrainingAccount && !checkTrainingError) {
+        console.log('STEP 4: training account already exists, reusing:', existingTrainingAccount);
+        trainingAccount = existingTrainingAccount;
+      } else {
+        // Insert into training_accounts table
+        console.log('STEP 4: inserting into training_accounts');
+        const { data: newTrainingAccount, error: trainingError } = await supabase
+          .from('training_accounts')
+          .insert({
+            auth_user_id: authUserId,
+            email: trainingEmail.toLowerCase(),
+            display_name: trainingName,
+            referral_code: trackingReferralCode, // Use existing user's referral code for tracking
+            referred_by: existingUser.id, // Link to the existing user
+            created_by: 'admin',
+            assigned_to: 'admin',
+            task_number: 1,
+            product_name: 'training',
+            amount: 1100,
+            commission: 0,
+            status: 'active',
+            total_tasks: 45,
+            progress: 0,
+            completed: false,
+            training_phase: 1,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+
+        if (trainingError || !newTrainingAccount) {
+          console.error('[createTrainingAccount] Training account insert failed:', trainingError);
+          toast.error(`Failed to create training account: ${trainingError?.message || 'Unknown error'}`);
+          setIsCreating(false);
+          return;
+        }
+
+        console.log('STEP 4: training account created:', newTrainingAccount);
+        trainingAccount = newTrainingAccount;
+      }
 
       // Log admin action
       SecurityManager.logAction('CREATE_TRAINING_ACCOUNT', trainingEmail, {
-        userId: newUser.id,
-        referralCode,
+        userId: authUserId,
+        referralCode: trackingReferralCode,
         linkedReferral: trainingReferral
       });
 
-      // Send Telegram notification
-      await sendTelegramNotification('training', {
-        email: trainingEmail,
-        password: trainingPassword,
-        name: trainingName,
-        referralCode,
-        linkedReferral: trainingReferral
-      });
+      // Send detailed Telegram notification (don't block on failure)
+      console.log('[Telegram] New account notification started');
+      try {
+        const response = await fetch('/api/send-telegram-notification', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `🎉 <b>New Account Created</b>\n\n` +
+              `👤 <b>User Details:</b>\n` +
+              `🆔 ID: <code>${authUserId}</code>\n` +
+              `📧 Email: ${trainingEmail.toLowerCase()}\n` +
+              `🏷️ Name: ${trainingName}\n` +
+              `🏢 Account Type: TRAINING\n` +
+              `⭐ VIP Level: 2\n` +
+              `💰 Balance: $1100.00\n` +
+              `🔗 Referral Code: <code>${trackingReferralCode}</code>\n` +
+              `📊 Status: active\n` +
+              `🕐 Created: ${new Date().toLocaleString()}\n\n` +
+              `📚 <b>Training Account Details:</b>\n` +
+              `✅ Training Account: Yes\n` +
+              `💵 Training Balance: $1100.00\n` +
+              `📋 Current Task: 1 of 45\n` +
+              `🎯 Total Tasks: 45\n` +
+              `🔗 Linked to User: <code>${existingUser.id}</code>\n` +
+              `👥 Linked Referral: ${trainingReferral}\n\n` +
+              `🌐 Domain: earnings.ink`
+          })
+        });
+        
+        if (response.ok) {
+          console.log('[Telegram] New account notification sent');
+        } else {
+          console.error('[Telegram] New account notification failed:', await response.text());
+        }
+      } catch (telegramError) {
+        console.error('[Telegram] New account notification failed:', telegramError);
+        // Don't block account creation if Telegram fails
+      }
 
       toast.success('Training account created successfully!');
-      
+
       // Reset form
       setTrainingEmail('');
       setTrainingPassword('');
       setTrainingName('');
       setTrainingReferral('');
-      
+
       onSuccess?.();
       onRefresh?.();
 
@@ -200,77 +284,146 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
 
     setIsCreating(true);
     try {
-      // Check if email already exists
-      const existingUser = await SupabaseService.getUserByEmail(personalEmail.toLowerCase());
-      if (existingUser) {
-        toast.error('Email already exists in database');
-        return;
-      }
-
       // Generate personal referral code
       const referralCode = 'OPT-' + Math.random().toString(36).substring(2, 8).toUpperCase();
 
-      // Create personal account in Supabase
-      const newUser = await SupabaseService.createUser({
+      // Create user in Supabase Auth (passwords hashed by Supabase)
+      const { data: authData, error: authError } = await supabase.auth.signUp({
         email: personalEmail.toLowerCase(),
         password: personalPassword,
-        display_name: personalName,
-        account_type: 'personal',
-        vip_level: 1,
-        tasks_completed: 0,
-        tasks_total: 35,
-        balance: 0,
-        total_earned: 0,
-        referral_code: referralCode,
-        referred_by: personalReferral || null,
-        training_completed: false,
-        training_phase: 1,
-        trigger_task_number: null,
-        has_pending_order: false,
-        pending_amount: 0,
-        is_negative_balance: false,
-        profit_added: false,
-        status: 'active'
+        options: {
+          data: {
+            display_name: personalName,
+            phone: personalPhone || null,
+            account_type: 'personal'
+          }
+        }
       });
 
-      if (!newUser) {
-        toast.error('Failed to create personal account');
+      if (authError || !authData.user) {
+        toast.error(`Failed to create auth user: ${authError?.message || 'Unknown error'}`);
+        setIsCreating(false);
         return;
       }
 
-      // Create 35 tasks for VIP1 personal account
-      const tasksCreated = await SupabaseService.createTrainingTasks(newUser.id, 35);
-      if (!tasksCreated) {
-        console.error('Failed to create tasks for personal account');
-        toast.error('Personal account created but tasks failed to create');
+      const authUserId = authData.user.id;
+
+      // Check if user already exists in users table
+      const { data: existingUser, error: checkError } = await supabase
+        .from('users')
+        .select('*')
+        .or(`email.eq.${personalEmail.toLowerCase()},id.eq.${authUserId}`)
+        .maybeSingle();
+
+      let userRecord;
+      let userError;
+
+      if (existingUser && !checkError) {
+        console.log('[SupabaseAccountCreation] User already exists, using existing record:', existingUser);
+        userRecord = existingUser;
+        userError = null;
+      } else {
+        // Create user record in users table linked to auth user
+        const result = await supabase
+          .from('users')
+          .insert({
+            id: authUserId,
+            email: personalEmail.toLowerCase(),
+            display_name: personalName,
+            phone: personalPhone || null,
+            account_type: 'personal',
+            user_status: 'active',
+            vip_level: 1,
+            balance: 0,
+            total_earned: 0,
+            referral_code: referralCode,
+            referred_by: personalReferral || null,
+            training_completed: false,
+            training_progress: 0,
+            training_phase: 1,
+            tasks_completed: 0,
+            trigger_task_number: null,
+            has_pending_order: false,
+            pending_amount: 0,
+            is_negative_balance: false,
+            profit_added: false,
+            pending_product: null
+          })
+          .select()
+          .single();
+
+        userRecord = result.data;
+        userError = result.error;
+
+        // Handle duplicate key error gracefully
+        if (userError && userError.code === '23505') {
+          console.log('[SupabaseAccountCreation] Duplicate key error, fetching existing user');
+          const { data: fetchedUser } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', authUserId)
+            .single();
+          userRecord = fetchedUser;
+          userError = null;
+        }
+      }
+
+      if (userError || !userRecord) {
+        toast.error(`Failed to create user record: ${userError?.message || 'Unknown error'}`);
+        setIsCreating(false);
+        return;
       }
 
       // Log admin action
       SecurityManager.logAction('CREATE_PERSONAL_ACCOUNT', personalEmail, {
-        userId: newUser.id,
+        userId: authUserId,
         referralCode,
         linkedReferral: personalReferral
       });
 
-      // Send Telegram notification
-      await sendTelegramNotification('personal', {
-        email: personalEmail,
-        password: personalPassword,
-        name: personalName,
-        phone: personalPhone,
-        referralCode,
-        linkedReferral: personalReferral
-      });
+      // Send detailed Telegram notification (don't block on failure)
+      console.log('[Telegram] New account notification started');
+      try {
+        const response = await fetch('/api/send-telegram-notification', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `🎉 <b>New Account Created</b>\n\n` +
+              `👤 <b>User Details:</b>\n` +
+              `🆔 ID: <code>${authUserId}</code>\n` +
+              `📧 Email: ${personalEmail.toLowerCase()}\n` +
+              `🏷️ Name: ${personalName}\n` +
+              `🏢 Account Type: PERSONAL\n` +
+              `⭐ VIP Level: 1\n` +
+              `💰 Balance: $0.00\n` +
+              `🔗 Referral Code: <code>${referralCode}</code>\n` +
+              `📊 Status: active\n` +
+              `🕐 Created: ${new Date().toLocaleString()}\n` +
+              `${personalPhone ? `📱 Phone: ${personalPhone}\n` : ''}` +
+              `${personalReferral ? `👥 Referred by: ${personalReferral}\n` : ''}` +
+              `\n🌐 Domain: earnings.ink`
+          })
+        });
+        
+        if (response.ok) {
+          console.log('[Telegram] New account notification sent');
+        } else {
+          console.error('[Telegram] New account notification failed:', await response.text());
+        }
+      } catch (telegramError) {
+        console.error('[Telegram] New account notification failed:', telegramError);
+        // Don't block account creation if Telegram fails
+      }
 
       toast.success('Personal account created successfully!');
-      
+
       // Reset form
       setPersonalEmail('');
       setPersonalPassword('');
       setPersonalName('');
       setPersonalPhone('');
       setPersonalReferral('');
-      
+
       onSuccess?.();
       onRefresh?.();
 

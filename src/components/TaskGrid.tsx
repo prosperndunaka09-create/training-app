@@ -2,9 +2,12 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
 import { CheckCircle, Lock, Zap, Loader2, DollarSign, Award, Star, ShoppingBag, Send, Package, Headphones, AlertTriangle, MessageCircle, ArrowRight, Plus, Sparkles, Crown, GraduationCap } from 'lucide-react';
 import DailyBonus from './DailyBonus';
+import Phase2Checkpoint from './Phase2Checkpoint';
 import { toast } from '@/components/ui/use-toast';
+import { Button } from '@/components/ui/button';
 import ProductCatalogService, { Product } from '@/services/productCatalogService';
 import SupabaseService from '@/services/supabaseService';
+import { supabase } from '@/lib/supabase';
 
 
 
@@ -56,7 +59,7 @@ const ProductPreloader: React.FC<{ onComplete: () => void }> = ({ onComplete }) 
   );
 };
 
-// Simple Product Card - Just shows product with profit and submit button
+// Simple Product Card - Clean compact design
 const SimpleProductCard: React.FC<{
   product: Product;
   reward: number;
@@ -73,15 +76,16 @@ const SimpleProductCard: React.FC<{
         <div className="absolute top-3 right-3">
           <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 shadow-lg">
             <Crown className="w-3 h-3" />
-            VIP{Math.ceil(taskNumber / 10)}
+            {isTraining ? 'VIP2' : `VIP${Math.ceil(taskNumber / 10)}`}
           </div>
         </div>
 
-        <div className="mb-4">
+        <div className="mb-4 min-h-[260px] flex items-center justify-center">
           <img
             src={product.image}
             alt={product.name}
-            className="w-full h-48 object-contain rounded-2xl bg-gradient-to-br from-white/[0.05] to-transparent"
+            className="w-full h-64 object-contain rounded-2xl bg-gradient-to-br from-white/[0.05] to-transparent"
+            onError={(e) => { e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23e5e7eb%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%239ca3af%22%3ENo Image%3C/text%3E%3C/svg%3E'; }}
           />
         </div>
 
@@ -158,6 +162,7 @@ const CombinationProductCard: React.FC<{
                 src={product1.image}
                 alt={product1.name}
                 className="w-full h-32 object-contain rounded-xl bg-gradient-to-br from-white/[0.05] to-transparent group-hover:brightness-110 transition-all"
+                onError={(e) => { e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E'; }}
               />
               <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-lg">
                 1
@@ -181,6 +186,7 @@ const CombinationProductCard: React.FC<{
                 src={product2.image}
                 alt={product2.name}
                 className="w-full h-32 object-contain rounded-xl bg-gradient-to-br from-white/[0.05] to-transparent group-hover:brightness-110 transition-all"
+                onError={(e) => { e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E'; }}
               />
               <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-lg">
                 2
@@ -272,13 +278,13 @@ const ProgressTracker: React.FC<{ tasks: any[]; currentTask: number; productCata
         {tasks.map((task: any) => {
           const product = (safeCatalog || []).length > 0 
             ? safeCatalog[(task.task_number - 1) % safeCatalog.length]
-            : { image: 'https://via.placeholder.com/40', name: 'Product' };
+            : { image: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E', name: 'Product' };
           const isActive = task.task_number === currentTask;
           const isCompleted = task.status === 'completed';
           const isPending = task.status === 'pending';
           return (
             <div key={task.task_number} data-task={task.task_number} className={`relative flex-shrink-0 w-10 h-10 rounded-lg overflow-hidden border-2 transition-all duration-300 ${isActive ? 'border-indigo-500 ring-2 ring-indigo-500/30 scale-110' : isCompleted ? 'border-emerald-500/50 opacity-80' : isPending ? 'border-indigo-500/30' : 'border-white/[0.06] opacity-30'}`}>
-              <img src={product?.image || 'https://via.placeholder.com/40'} alt="" className="w-full h-full object-cover" />
+              <img src={product?.image || 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E'} alt="" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E'; }} />
               {isCompleted && <div className="absolute inset-0 bg-emerald-500/30 flex items-center justify-center"><CheckCircle size={14} className="text-white" /></div>}
               {!isCompleted && !isPending && <div className="absolute inset-0 bg-black/60 flex items-center justify-center"><Lock size={10} className="text-gray-400" /></div>}
               {isActive && <div className="absolute inset-0 border-2 border-indigo-400 rounded-md animate-pulse" />}
@@ -291,7 +297,7 @@ const ProgressTracker: React.FC<{ tasks: any[]; currentTask: number; productCata
 };
 
 const TaskGrid: React.FC = () => {
-  const { user, tasks, refreshTasks, completeTask, isLoading } = useAppContext();
+  const { user, tasks, refreshTasks, refreshUser, completeTask, isLoading } = useAppContext();
   const [showSuccess, setShowSuccess] = useState(false);
   const [completedReward, setCompletedReward] = useState(0);
   const [completedCount, setCompletedCount] = useState(0);
@@ -306,21 +312,152 @@ const TaskGrid: React.FC = () => {
   const [showTrainingShowroomModal, setShowTrainingShowroomModal] = useState(false);
   const [previewImageFailed, setPreviewImageFailed] = useState(false);
 
-  // Load appropriate product catalog based on account type
+  // Load appropriate product catalog from Supabase based on account type
   useEffect(() => {
+    const loadProducts = async () => {
+      try {
+        const isTraining = user?.account_type === 'training';
+        console.log('[ProductCatalog] Loading products from Supabase for account type:', user?.account_type);
+        
+        const catalog = isTraining 
+          ? await ProductCatalogService.getTrainingProducts()
+          : await ProductCatalogService.getPersonalProducts();
+        
+        setProductCatalog(catalog);
+        console.log(`[ProductCatalog] Loaded ${catalog.length} ${isTraining ? 'training' : 'personal'} products from Supabase`);
+      } catch (error) {
+        console.error('[ProductCatalog] Error loading products:', error);
+        // Fall back to defaults if Supabase fails
+        const isTraining = user?.account_type === 'training';
+        const fallback = isTraining 
+          ? ProductCatalogService.getProductForTask(1, 'training')
+          : ProductCatalogService.getProductForTask(1, 'personal');
+        console.log('[ProductCatalog] Using fallback product');
+      }
+    };
+
+    loadProducts();
+
+    // Subscribe to realtime product updates
     const isTraining = user?.account_type === 'training';
-    const catalog = isTraining 
-      ? ProductCatalogService.getTrainingProducts()
-      : ProductCatalogService.getPersonalProducts();
-    setProductCatalog(catalog);
+    if (isTraining) {
+      ProductCatalogService.subscribeToTrainingProducts((products) => {
+        console.log('[ProductCatalog] Training products updated via realtime:', products.length);
+        setProductCatalog(products);
+      });
+    } else {
+      ProductCatalogService.subscribeToPersonalProducts((products) => {
+        console.log('[ProductCatalog] Personal products updated via realtime:', products.length);
+        setProductCatalog(products);
+      });
+    }
+
+    // Cleanup subscriptions on unmount or account type change
+    return () => {
+      ProductCatalogService.unsubscribeFromTrainingProducts();
+      ProductCatalogService.unsubscribeFromPersonalProducts();
+    };
   }, [user?.account_type]);
 
-  useEffect(() => { refreshTasks(); }, [refreshTasks]);
+  // Subscribe to checkpoint changes for realtime updates when admin approves
+  // ONLY in Phase 2 - Phase 1 has no checkpoints
+  useEffect(() => {
+    if (!user?.id) return;
+    
+    // Only subscribe to checkpoint changes in Phase 2
+    const isPhase2 = Number(user?.training_phase) === 2;
+    if (!isPhase2) {
+      console.log('[Checkpoint User] Skipping subscription - not Phase 2');
+      return;
+    }
+    
+    console.log('[Checkpoint User] Subscribing to checkpoint changes for user:', user.id);
+    
+    const channel = supabase
+      .channel('phase2_checkpoints_changes')
+      .on(
+        'postgres_changes',
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'phase2_checkpoints',
+          filter: `auth_user_id=eq.${user.id}`
+        },
+        async (payload) => {
+          console.log('[Checkpoint User] Checkpoint change detected:', payload.eventType, payload.new);
+          
+          // Refresh user data to get updated checkpoint state
+          const updatedCheckpoint = payload.new as any;
+          if (updatedCheckpoint?.status === 'approved') {
+            console.log('[Checkpoint User] approved checkpoint detected via realtime');
+          }
+          
+          // Trigger a user refresh to get latest checkpoint data
+          // This will update the UI to show/hide checkpoint modal or submit button
+          window.dispatchEvent(new CustomEvent('refresh_user_checkpoint', { 
+            detail: { checkpointId: updatedCheckpoint?.id, status: updatedCheckpoint?.status }
+          }));
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Checkpoint User] Subscription status:', status);
+      });
+    
+    return () => {
+      console.log('[Checkpoint User] Unsubscribing from checkpoint changes');
+      channel.unsubscribe();
+    };
+  }, [user?.id, user?.training_phase]);
+
+  // Load tasks only once on mount - avoid dependency on refreshTasks which changes when user changes
+  const dataLoaded = useRef(false);
+  useEffect(() => {
+    if (dataLoaded.current) return;
+    
+    console.log('[TaskGrid] Calling refreshTasks once on mount');
+    const loadTasks = async () => {
+      try {
+        await refreshTasks();
+        dataLoaded.current = true;
+      } catch (error) {
+        console.error('[TaskGrid] Error in refreshTasks:', error);
+      } finally {
+        console.log('[TaskGrid] refreshTasks completed');
+      }
+    };
+    loadTasks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const safeTasks = tasks || [];
   const calculatedCompletedCount = safeTasks.filter(t => t.status === 'completed').length;
-  const pendingTask = safeTasks.find(t => t.status === 'pending') || safeTasks[0];
-  const isTasksLoading = isLoading || (safeTasks.length === 0 && !pendingTask);
+  
+  // Define isTraining first since other variables depend on it
+  const isTraining = user?.account_type === 'training';
+  
+  // For training accounts, use user.task_number from Supabase directly (source of truth)
+  // task_number = next task to complete, so completed = task_number - 1
+  const trainingCompletedCount = isTraining ? Math.max(0, (user?.task_number || 1) - 1) : 0;
+  
+  // For training accounts, use user.task_number from Supabase directly (source of truth)
+  // For personal accounts, find pending task from tasks array
+  const currentTaskNumber = isTraining ? (user?.task_number || 1) : (safeTasks.find(t => t.status === 'pending')?.task_number || 1);
+  const pendingTask = safeTasks.find(t => t.task_number === currentTaskNumber) || {
+    id: `task_${currentTaskNumber}`,
+    task_number: currentTaskNumber,
+    status: 'pending' as const,
+    reward: 0,
+    title: 'Current Task',
+    description: `Task ${currentTaskNumber}`,
+    user_id: user?.id || '',
+    created_at: new Date().toISOString(),
+    completed_at: null,
+    task_set: 0
+  };
+  const isTasksLoading = isLoading || (safeTasks.length === 0 && !isTraining);
+  
+  // Use Supabase-derived completed count for training accounts
+  const displayCompletedCount = isTraining ? trainingCompletedCount : (completedCount || calculatedCompletedCount);
   
   // Reset loading state when pending task changes
   useEffect(() => {
@@ -336,27 +473,23 @@ const TaskGrid: React.FC = () => {
     }
   }, [user?.has_pending_order]);
   
-  // Don't include the pending completion task in total reward until after success animation
-  const totalReward = safeTasks
-    .filter(t => t.status === 'completed' && t.task_number !== pendingCompletionTask)
-    .reduce((sum, t) => sum + t.reward, 0);
-  const isTraining = user?.account_type === 'training';
+  // Use user.total_earned from database as the single source of truth
+  const totalReward = user?.total_earned || 0;
   // Support Phase 1 and Phase 2 for both account types
   // Training: 45 tasks per phase (90 total)
   // Personal: 35 tasks per phase (70 total)
   const tasksPerPhase = isTraining ? 45 : 35;
   const currentPhase = user?.training_phase || 1;
 
-completedCount
 const totalTasks = tasksPerPhase;
 
 const progress = totalTasks > 0
-  ? (completedCount / totalTasks) * 100
+  ? (displayCompletedCount / totalTasks) * 100
   : 0;
 
 const allComplete = isTraining
-  ? completedCount === 45
-  : completedCount === 35;
+  ? displayCompletedCount === 45
+  : displayCompletedCount === 35;
   
   // NEW: Check if user has completed training (for non-training accounts)
   // ALL personal accounts must complete training before accessing tasks
@@ -365,6 +498,26 @@ const allComplete = isTraining
 
   const handleSubmit = async () => {
     if (!pendingTask || isSubmitting) return;
+    
+    console.log('[TaskGrid Submit] Started - task number:', pendingTask.task_number);
+    
+    // Only check for checkpoint blocking in Phase 2
+    const isPhase2 = Number(user?.training_phase) === 2;
+    
+    // BLOCK task submission if Phase 2 checkpoint is pending review (Phase 2 only)
+    if (isPhase2 && user?.phase2_checkpoint?.status === 'pending_review') {
+      toast({
+        title: 'Checkpoint Review Required',
+        description: 'Your account is pending admin review. Contact customer service to continue.',
+        variant: 'destructive',
+      });
+      setShowCheckpointModal(true);
+      return;
+    }
+    
+    // NOTE: We do NOT block task submission when checkpoint is approved.
+    // Instead, user sees a "Submit Checkpoint Product" button on their task page.
+    // They can close the modal and see the submit button on their task page.
     
     // BLOCK task submission if pending order exists
     if (user?.has_pending_order) {
@@ -376,23 +529,45 @@ const allComplete = isTraining
       return;
     }
     
+    // ALLOW normal task submission when checkpoint is completed or doesn't exist
+    // Note: We only block when checkpoint is pending_review, not when completed
+    // Users should be able to submit normal tasks 32-45 after checkpoint completion
+    // The return statement above was incorrectly blocking normal tasks
+    
+    // NOW safe to set loading state - all guard checks passed
     setIsSubmitting(true);
     setPendingCompletionTask(pendingTask.task_number);
-    const result = await completeTask(pendingTask.task_number);
+    
+    try {
+      const result = await completeTask(pendingTask.task_number);
+      console.log('[TaskGrid Submit] completeTask result:', result);
 
-if (result.success) {
-  setCompletedReward(result.reward || pendingTask.reward);
-  setCompletedCount(prev => prev + 1);
-  setShowSuccess(true);
+      if (result.success) {
+        setCompletedReward(result.reward || pendingTask.reward);
+        setCompletedCount(prev => prev + 1);
+        setShowSuccess(true);
+        console.log('[TaskGrid Submit] Task completed successfully - reward:', result.reward);
       
-      // Auto-advance to next task after 2.5 seconds
-      setTimeout(() => {
-        handleNextProduct();
-      }, 2500);
-    } else {
+        // Auto-advance to next task after 2.5 seconds
+        setTimeout(() => {
+          handleNextProduct();
+        }, 2500);
+      } else {
+        console.error('[TaskGrid Submit] Task completion failed');
+        setPendingCompletionTask(null);
+      }
+    } catch (error) {
+      console.error('[TaskGrid Submit] Exception during task submission:', error);
       setPendingCompletionTask(null);
+      toast({
+        title: 'Error',
+        description: 'Failed to complete task. Please try again.',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsSubmitting(false);
+      console.log('[TaskGrid Submit] Finished - loading state reset');
     }
-    setIsSubmitting(false);
   };
 
   const handleNextProduct = useCallback(() => {
@@ -407,27 +582,279 @@ if (result.success) {
   }, []);
 
   // Ensure catalog is never empty - use defaults if needed
+  // Since getTrainingProducts/getPersonalProducts are now async, we use the defaults synchronously
   const safeCatalog = productCatalog.length > 0 ? productCatalog : 
-    (user?.account_type === 'training' ? ProductCatalogService.getTrainingProducts() : ProductCatalogService.getPersonalProducts());
+    (user?.account_type === 'training' 
+      ? [ProductCatalogService.getProductForTask(1, 'training', undefined)] 
+      : [ProductCatalogService.getProductForTask(1, 'personal', undefined)]);
   
+  // RESTORED: Original product-based commission with scaling to achieve $165.60 total
+  const RAW_COMMISSION_RATE = 0.01; // 1% base rate
+  const SCALE_FACTOR = 2.735; // Scale raw commissions to reach $165.60 total
+  
+  // Helper function to calculate scaled commission for a product
+  const calculateScaledCommission = (price: number) => {
+    const rawCommission = price * RAW_COMMISSION_RATE;
+    return Math.round(rawCommission * SCALE_FACTOR * 100) / 100;
+  };
+  
+  // Calculate commission for current task
+  const currentTaskCommission = pendingTask ? (() => {
+    if (isTraining) {
+      // Use scaled product-based commission for training accounts
+      const product = safeCatalog[(pendingTask.task_number - 1) % safeCatalog.length];
+      if (product) {
+        const commission = calculateScaledCommission(product.price);
+        console.log('[TaskGrid] Scaled product commission for task', pendingTask.task_number, ':', commission);
+        return commission;
+      }
+      return 0;
+    }
+    // For personal accounts, use product-based commission
+    const product = safeCatalog[(pendingTask.task_number - 1) % safeCatalog.length];
+    if (product) {
+      const commission = SupabaseService.calculateTaskReward(product.price, user?.vip_level || 2, false);
+      return commission;
+    }
+    return pendingTask.reward || 0;
+  })() : 0;
+
   // When pending order exists and we're at the trigger task, show pending product
   const currentProduct = pendingTask 
     ? (user?.has_pending_order && pendingTask.task_number === user?.trigger_task_number && user?.pending_product)
       ? user.pending_product  // Show the pending order product
       : safeCatalog.length > 0 
         ? safeCatalog[(pendingTask.task_number - 1) % safeCatalog.length]  // Show regular product
-        : { id: 'loading', name: 'Loading...', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }
+        : { id: 'loading', name: 'Loading...', brand: 'Loading', price: 0, category: 'Loading', image: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22150%22 height=%22150%22%3E%3Crect width=%22150%22 height=%22150%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E' }
     : null;
-  const taskList = safeTasks.length > 0 ? safeTasks : Array.from({ length: isTraining ? 45 : 35 }, (_, i) => ({ task_number: i + 1, status: i === 0 ? 'pending' : 'locked', reward: [0.7, 1.6, 2.5, 6.4, 7.2][i % 5] }));
-  const previewProduct = safeCatalog[2] || safeCatalog[0] || { id: 'preview', name: 'Preview', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' };
+  // For training accounts, rebuild task list based on user.task_number from Supabase
+  const taskList = isTraining 
+    ? Array.from({ length: 45 }, (_, i) => {
+        const taskNum = i + 1;
+        const currentTaskNum = user?.task_number || 1;
+        let status: 'completed' | 'pending' | 'locked' = 'locked';
+        if (taskNum < currentTaskNum) status = 'completed';
+        else if (taskNum === currentTaskNum) status = 'pending';
+        
+        // Get product for display purposes (name, image, commission, etc.)
+        const product = safeCatalog[(taskNum - 1) % safeCatalog.length];
+        
+        // Use scaled product-based commission for training accounts (unique per product)
+        const commission = product ? calculateScaledCommission(product.price) : 0;
+        
+        return {
+          id: `task_${taskNum}`,
+          task_number: taskNum,
+          status,
+          reward: commission,
+          title: product?.name || `Task ${taskNum}`,
+          description: `Task ${taskNum}`,
+          user_id: user?.id || '',
+          created_at: new Date().toISOString(),
+          completed_at: status === 'completed' ? new Date().toISOString() : null,
+          task_set: 0
+        };
+      })
+    : (safeTasks.length > 0 ? safeTasks : Array.from({ length: 35 }, (_, i) => ({ task_number: i + 1, status: i === 0 ? 'pending' : 'locked', reward: [0.7, 1.6, 2.5, 6.4, 7.2][i % 5] })));
+  const previewProduct = safeCatalog[2] || safeCatalog[0] || { id: 'preview', name: 'Preview', brand: 'Loading', price: 0, category: 'Loading', image: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22150%22 height=%22150%22%3E%3Crect width=%22150%22 height=%22150%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E' };
   const previewImageSrc = previewProduct?.image || '';
 
   useEffect(() => {
     setPreviewImageFailed(false);
   }, [previewImageSrc]);
 
+  // Checkpoint modal visibility state - ONLY show for pending_review (blocking) in Phase 2
+  // Phase 1 has NO checkpoint modal
+  const isPhase2Checkpoint = Number(user?.training_phase) === 2 && user?.phase2_checkpoint?.status === 'pending_review';
+  const [showCheckpointModal, setShowCheckpointModal] = useState(isPhase2Checkpoint);
+  
+  // Update modal visibility when checkpoint status changes (Phase 2 only)
+  useEffect(() => {
+    // Only auto-show modal for pending_review (blocking state) in Phase 2
+    // Phase 1 has no checkpoint modal
+    const isPhase2 = Number(user?.training_phase) === 2;
+    if (isPhase2 && user?.phase2_checkpoint?.status === 'pending_review') {
+      setShowCheckpointModal(true);
+    }
+  }, [user?.phase2_checkpoint?.status, user?.training_phase]);
+  
+  // Handle checkpoint product submission
+  const handleSubmitCheckpointProduct = async () => {
+    console.log('[Checkpoint Submit] button clicked');
+    
+    if (!user?.phase2_checkpoint || !user?.id) {
+      console.error('[Checkpoint Submit] Missing user or checkpoint data');
+      return;
+    }
+    
+    
+    const checkpointId = user.phase2_checkpoint.id;
+    console.log('[Checkpoint Submit] checkpoint id:', checkpointId);
+    
+    try {
+      const result = await SupabaseService.submitCheckpointProduct(
+        user.id,
+        checkpointId
+      );
+      
+      if (result.success) {
+        console.log('[Checkpoint Submit] checkpoint completed, clearing frontend state immediately');
+        
+        // IMMEDIATELY clear checkpoint from frontend state to hide premium submit section
+        // This ensures the UI updates before the reload
+        if (user) {
+          console.log('[Checkpoint Submit] Clearing phase2_checkpoint from user state');
+          // @ts-ignore - we know this field exists
+          user.phase2_checkpoint = null;
+        }
+        
+        toast({
+          title: 'Premium product submitted. 6x profit added.',
+          description: `Reward of $${result.bonusAmount?.toFixed(2)} has been added to your balance. Task advanced to ${result.nextTaskNumber}.`,
+          variant: 'default',
+        });
+        
+        // Close modal and refresh user data
+        setShowCheckpointModal(false);
+        
+        // Refresh user data to get updated balance
+        await refreshTasks();
+        await refreshUser();
+        
+        // Small delay to ensure state updates before reload
+        setTimeout(() => {
+          window.location.reload();
+        }, 500);
+      } else {
+        console.error('[Checkpoint Submit] Submission failed:', result.error);
+        toast({
+          title: 'Error',
+          description: result.error || 'Failed to submit checkpoint product',
+          variant: 'destructive',
+        });
+      }
+    } catch (error) {
+      console.error('[Checkpoint Submit] Exception during submission:', error);
+      toast({
+        title: 'Error',
+        description: 'An unexpected error occurred',
+        variant: 'destructive',
+      });
+    }
+  };
+
   return (
     <div className="space-y-4 md:space-y-6">
+      {/* Phase 2 Checkpoint Modal - ONLY for Phase 2 pending_review (blocking) */}
+      {Number(user?.training_phase) === 2 && showCheckpointModal && user?.phase2_checkpoint?.status === 'pending_review' && (
+        <Phase2Checkpoint 
+          checkpoint={user.phase2_checkpoint}
+          onContactSupport={() => {
+            window.open('https://t.me/EARNINGSLLCONLINECS1', '_blank');
+          }}
+          onClose={() => setShowCheckpointModal(false)}
+          onSubmitCheckpointProduct={handleSubmitCheckpointProduct}
+          userBalance={user?.balance}
+        />
+      )}
+      
+      {/* Checkpoint Approved - Combination Product Review with Submit Button (Phase 2 only) */}
+      {/* Only show if checkpoint is approved AND current task number matches checkpoint task number */}
+      {/* If task number has advanced beyond checkpoint, checkpoint is considered completed */}
+      {Number(user?.training_phase) === 2 && 
+       user?.phase2_checkpoint?.status === 'approved' &&
+       Number(user?.task_number) <= Number(user?.phase2_checkpoint?.task_number || 31) && (
+        <div className="space-y-4">
+          {/* Header Section */}
+          <div className="bg-[#1a1f2e] border border-white/[0.06] rounded-2xl p-6">
+            <div className="text-center mb-4">
+              <h2 className="text-2xl font-bold text-white mb-2">Combination Product Review Required</h2>
+              <p className="text-gray-400">Phase 2 • Task {user.phase2_checkpoint.task_number || 31}</p>
+            </div>
+            
+            {/* Warning Banner */}
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-amber-400 font-bold">Manual Review Required</h3>
+                  <p className="text-amber-300/60 text-sm">Admin approved - Submit now to claim your 6x checkpoint reward</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* Combination Product Pair */}
+            <div className="bg-[#0f1420] rounded-xl p-4 mb-6">
+              <p className="text-sm text-gray-500 mb-4">Combination Product Pair</p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Product 1 */}
+                <div className="bg-[#1a1f2e] rounded-xl p-4 flex items-center gap-4">
+                  <img
+                    src={user.phase2_checkpoint.product1_image || safeCatalog[0]?.image}
+                    alt={user.phase2_checkpoint.product1_name || 'Product 1'}
+                    className="w-16 h-16 rounded-lg object-cover bg-gray-800"
+                  />
+                  <div>
+                    <h4 className="text-white font-medium">{user.phase2_checkpoint.product1_name || 'PulseTrack Slim'}</h4>
+                    <p className="text-emerald-400 font-bold">${(user.phase2_checkpoint.product1_price || 69.99).toFixed(2)}</p>
+                  </div>
+                </div>
+                
+                {/* Plus divider */}
+                <div className="hidden md:flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                    <Plus className="w-5 h-5 text-amber-400" />
+                  </div>
+                </div>
+                
+                {/* Product 2 */}
+                <div className="bg-[#1a1f2e] rounded-xl p-4 flex items-center gap-4">
+                  <img
+                    src={user.phase2_checkpoint.product2_image || safeCatalog[1]?.image}
+                    alt={user.phase2_checkpoint.product2_name || 'Product 2'}
+                    className="w-16 h-16 rounded-lg object-cover bg-gray-800"
+                  />
+                  <div>
+                    <h4 className="text-white font-medium">{user.phase2_checkpoint.product2_name || 'Studio Monitor Pro'}</h4>
+                    <p className="text-emerald-400 font-bold">${(user.phase2_checkpoint.product2_price || 199.99).toFixed(2)}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* 6x Profit Info */}
+            <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20 rounded-xl p-4 mb-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
+                    <Sparkles className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-amber-400 font-bold text-lg">6x Profit Bonus</p>
+                    <p className="text-amber-300/60 text-sm">Commission Reward</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-3xl font-bold text-amber-400">${user.phase2_checkpoint.bonus_amount.toFixed(2)}</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* Submit Button */}
+            <Button 
+              onClick={handleSubmitCheckpointProduct}
+              className="w-full py-6 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-amber-500/30"
+            >
+              <CheckCircle className="w-5 h-5 mr-2" />
+              Submit Premium Product
+            </Button>
+          </div>
+        </div>
+      )}
+      
       {/* Combination Order Modal - Blocks tasks when pending order exists */}
       {user?.has_pending_order && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
@@ -688,7 +1115,7 @@ if (result.success) {
             <div className="w-9 h-9 md:w-11 md:h-11 rounded-lg md:rounded-xl bg-indigo-500/15 flex items-center justify-center"><Zap size={18} className="text-indigo-400" /></div>
             <div>
               <p className="text-xs text-gray-500 font-medium">{isTraining ? 'Training Progress' : 'Tasks Progress'}</p>
-              <p className="text-lg md:text-xl font-bold text-white">{completedCount} / {totalTasks}</p>
+              <p className="text-lg md:text-xl font-bold text-white">{displayCompletedCount} / {totalTasks}</p>
             </div>
           </div>
           <div className="mt-2 md:mt-3 h-2 bg-white/5 rounded-full overflow-hidden">
@@ -809,32 +1236,29 @@ if (result.success) {
                     <Headphones className="w-5 h-5" />
                     Contact Customer Service
                   </button>
-                  
-                  <p className="text-sm text-gray-500 mt-4">Admin will manually reset your account to Phase 2</p>
                 </>
               ) : isTraining && user?.training_phase === 2 ? (
                 // Phase 2 Complete - Training fully done
                 <>
                   <div className="w-20 h-20 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-4"><Award size={40} className="text-emerald-400" /></div>
-                  <h3 className="text-2xl font-bold text-white mb-2">🏆 Training Fully Complete!</h3>
-                  <p className="text-gray-400 mb-2">You've completed both Phase 1 and Phase 2!</p>
-                  <p className="text-lg font-bold text-emerald-400">Total earned: ${totalReward.toFixed(2)}</p>
-                  <div className="mt-4 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl max-w-md mx-auto space-y-3">
-                    <p className="text-sm text-emerald-400 font-medium">🎉 Congratulations! Training is Complete!</p>
-                    <div className="text-left text-sm text-gray-300 space-y-2">
-                      <p className="flex items-center gap-2">
-                        <span className="text-emerald-400">✓</span>
-                        <span>Your <strong>${totalReward.toFixed(2)}</strong> earnings will be transferred to your personal account</span>
-                      </p>
-                      <p className="flex items-center gap-2">
-                        <span className="text-amber-400">➜</span>
-                        <span><strong>Next Step:</strong> Click "Logout" below to automatically transfer your balance</span>
-                      </p>
-                      <p className="flex items-center gap-2">
-                        <span className="text-blue-400">ℹ</span>
-                        <span>After logout, login to your personal account to see your transferred balance</span>
-                      </p>
-                    </div>
+                  <h3 className="text-2xl font-bold text-white mb-2">🏆 Training Complete!</h3>
+                  <p className="text-gray-400 mb-4">Congratulations! You have completed both training phases.</p>
+                  <p className="text-lg font-bold text-emerald-400 mb-6">Total earned: ${totalReward.toFixed(2)}</p>
+                  
+                  <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl max-w-md mx-auto mb-4">
+                    <p className="text-emerald-400 font-medium mb-2">🎉 Personal Account Activated</p>
+                    <p className="text-sm text-gray-400">Your personal account is now fully activated.</p>
+                  </div>
+                  
+                  <div className="mt-4 p-4 bg-slate-700/50 border border-slate-600 rounded-xl max-w-md mx-auto space-y-3">
+                    <p className="text-sm text-gray-300">Your earnings will be transferred to your personal account.</p>
+                    <button 
+                      onClick={() => window.open('https://t.me/EARNINGSLLCONLINECS1', '_blank')}
+                      className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-xl font-bold text-white shadow-lg hover:shadow-xl transition-all flex items-center gap-2 mx-auto"
+                    >
+                      <Headphones className="w-5 h-5" />
+                      Contact Support for Transfer
+                    </button>
                   </div>
                 </>
               ) : (
@@ -853,15 +1277,15 @@ if (result.success) {
             <ProductPreloader onComplete={handlePreloaderComplete} />
           ) : user?.has_pending_order && pendingTask?.task_number === user?.trigger_task_number && user?.pending_product ? (
             <CombinationProductCard 
-              product1={safeCatalog.length > 0 ? safeCatalog[(pendingTask.task_number - 1) % safeCatalog.length] : { id: 'p1', name: 'Product 1', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }} 
-              product2={safeCatalog.length > 0 ? safeCatalog[(pendingTask.task_number) % safeCatalog.length] : { id: 'p2', name: 'Product 2', brand: 'Loading', price: 0, category: 'Loading', image: 'https://via.placeholder.com/150' }}
+              product1={safeCatalog.length > 0 ? safeCatalog[(pendingTask.task_number - 1) % safeCatalog.length] : { id: 'p1', name: 'Product 1', brand: 'Loading', price: 0, category: 'Loading', image: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22150%22 height=%22150%22%3E%3Crect width=%22150%22 height=%22150%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E' }} 
+              product2={safeCatalog.length > 0 ? safeCatalog[(pendingTask.task_number) % safeCatalog.length] : { id: 'p2', name: 'Product 2', brand: 'Loading', price: 0, category: 'Loading', image: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22150%22 height=%22150%22%3E%3Crect width=%22150%22 height=%22150%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E' }}
               combinedPrice={user.pending_amount || 210}
               taskNumber={pendingTask.task_number}
               userBalance={user.balance || 0}
               onContactSupport={() => setShowSupportOptions(true)}
             />
-          ) : currentProduct && pendingTask ? (
-            <SimpleProductCard product={currentProduct as Product} reward={pendingTask.reward} taskNumber={pendingTask.task_number} totalTasks={totalTasks} onSubmit={handleSubmit} isSubmitting={isSubmitting} isTraining={isTraining} hasPendingOrder={user?.has_pending_order} />
+          ) : currentProduct && pendingTask && user?.phase2_checkpoint?.status !== 'pending_review' ? (
+            <SimpleProductCard product={currentProduct as Product} reward={currentTaskCommission} taskNumber={pendingTask.task_number} totalTasks={totalTasks} onSubmit={handleSubmit} isSubmitting={isSubmitting} isTraining={isTraining} hasPendingOrder={user?.has_pending_order} />
           ) : isTasksLoading ? (
             <div className="text-center py-12">
               <Loader2 size={40} className="text-indigo-500 mx-auto mb-4 animate-spin" />
@@ -873,7 +1297,7 @@ if (result.success) {
           )}
         </div>
         <div className="px-4 md:px-6 py-3 md:py-4 border-t border-white/[0.06] bg-white/[0.01]">
-          <div className="flex items-center justify-between mb-2 md:mb-3"><span className="text-xs font-medium text-gray-500">Product Queue</span><span className="text-xs font-bold text-indigo-400">{completedCount}/{totalTasks} completed</span></div>
+          <div className="flex items-center justify-between mb-2 md:mb-3"><span className="text-xs font-medium text-gray-500">Product Queue</span><span className="text-xs font-bold text-indigo-400">{displayCompletedCount}/{totalTasks} completed</span></div>
           <ProgressTracker tasks={taskList} currentTask={pendingTask?.task_number || 0} productCatalog={productCatalog} />
         </div>
       </div>
