@@ -2583,256 +2583,250 @@ export class SupabaseService {
   
   static async submitCheckpointProduct(
     authUserId: string,
-    checkpointId: string
+    checkpointId: string,
+    checkpointData?: any
   ): Promise<{ success: boolean; bonusAmount?: number; oldBalance?: number; newBalance?: number; nextTaskNumber?: number; error?: string }> {
     console.log('[Checkpoint Submit] === STARTING SUBMISSION ===');
     console.log('[Checkpoint Submit] authUserId:', authUserId);
     console.log('[Checkpoint Submit] checkpointId:', checkpointId);
-    
-    try {
-      // STEP 1: Fetch checkpoint
-      console.log('[Checkpoint Submit] [STEP 1] BEFORE fetching checkpoint');
-      console.log('[Checkpoint Submit] [STEP 1] Query table: public.phase2_checkpoints');
-      console.log('[Checkpoint Submit] [STEP 1] Checkpoint ID:', checkpointId);
-      console.log('[Checkpoint Submit] [STEP 1] Auth User ID:', authUserId);
+    console.log('[Checkpoint Submit] checkpointData provided:', !!checkpointData);
 
-      let checkpoint;
-      let fetchError;
+    let checkpoint = checkpointData;
 
+    // If checkpoint data not provided, fetch it with timeout
+    if (!checkpoint) {
+      console.log('[Checkpoint Submit] Checkpoint data not provided, fetching from database with timeout...');
       try {
-        const result = await supabase
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Checkpoint fetch timeout (10s)')), 10000)
+        );
+
+        const fetchPromise = supabase
           .from('phase2_checkpoints')
           .select('*')
           .eq('id', checkpointId)
           .eq('auth_user_id', authUserId)
           .maybeSingle();
 
+        const result = await Promise.race([fetchPromise, timeoutPromise]) as any;
+
+        if (result.error) {
+          console.error('[Checkpoint Submit] ERROR fetching checkpoint:', result.error);
+          return { success: false, error: 'Checkpoint not found: ' + result.error.message };
+        }
+
+        if (!result.data) {
+          console.error('[Checkpoint Submit] ERROR: No checkpoint data returned');
+          return { success: false, error: 'Checkpoint not found - no data returned' };
+        }
+
         checkpoint = result.data;
-        fetchError = result.error;
+        console.log('[Checkpoint Submit] Checkpoint fetched successfully:', checkpoint.id);
+      } catch (error) {
+        console.error('[Checkpoint Submit] EXCEPTION during checkpoint fetch:', error);
+        return { success: false, error: 'Checkpoint fetch failed: ' + (error instanceof Error ? error.message : 'Unknown error') };
+      }
+    } else {
+      console.log('[Checkpoint Submit] Using provided checkpoint data:', checkpoint.id);
+    }
 
-        console.log('[Checkpoint Submit] [STEP 1] AFTER fetching checkpoint (inside try)');
-        console.log('[Checkpoint Submit] [STEP 1] Supabase response data:', checkpoint);
-        console.log('[Checkpoint Submit] [STEP 1] Supabase response error:', fetchError);
-      } catch (queryError) {
-        console.error('[Checkpoint Submit] [STEP 1] EXCEPTION during fetch:', queryError);
-        return { success: false, error: 'Query exception: ' + (queryError instanceof Error ? queryError.message : 'Unknown error') };
-      }
+    console.log('[Checkpoint Submit] checkpoint found:', checkpoint.id);
+    console.log('[Checkpoint Submit] checkpoint status:', checkpoint.status);
+    console.log('[Checkpoint Submit] checkpoint bonus_amount:', checkpoint.bonus_amount);
 
-      console.log('[Checkpoint Submit] [STEP 1] AFTER fetching checkpoint (outside try)');
-
-      if (fetchError) {
-        console.error('[Checkpoint Submit] [STEP 1] ERROR fetching checkpoint:', fetchError);
-        console.error('[Checkpoint Submit] [STEP 1] Error details:', JSON.stringify(fetchError, null, 2));
-        return { success: false, error: 'Checkpoint not found: ' + fetchError.message };
-      }
-
-      if (!checkpoint) {
-        console.error('[Checkpoint Submit] [STEP 1] ERROR: No checkpoint data returned');
-        console.error('[Checkpoint Submit] [STEP 1] Checkpoint ID:', checkpointId);
-        console.error('[Checkpoint Submit] [STEP 1] Auth User ID:', authUserId);
-        return { success: false, error: 'Checkpoint not found - no data returned' };
-      }
-      
-      console.log('[Checkpoint Submit] [STEP 1] checkpoint found:', checkpoint.id);
-      console.log('[Checkpoint Submit] [STEP 1] checkpoint status:', checkpoint.status);
-      console.log('[Checkpoint Submit] [STEP 1] checkpoint bonus_amount:', checkpoint.bonus_amount);
-      
-      // Prevent duplicate bonus payment - check if already processed
-      if (checkpoint.status === 'completed' || checkpoint.status === 'bonus_paid' || checkpoint.status === 'submitted') {
-        console.log('[Checkpoint Submit] [STEP 1] Checkpoint already processed. Status:', checkpoint.status);
-        console.log('[Checkpoint Submit] [STEP 1] Returning success without adding bonus again');
-        // Return success so frontend can proceed, but don't add bonus again
-        // Get current task number for response
-        const { data: trainingAccount } = await supabase
-          .from('training_accounts')
-          .select('task_number')
-          .eq('auth_user_id', authUserId)
-          .single();
-        return { 
-          success: true, 
-          bonusAmount: 0,
-          nextTaskNumber: trainingAccount?.task_number || checkpoint.task_number + 1,
-          message: 'Checkpoint bonus was already claimed. Continuing with next task.'
-        };
-      }
-      
-      if (checkpoint.status !== 'approved') {
-        console.error('[Checkpoint Submit] [STEP 1] ERROR: Checkpoint not approved. Status:', checkpoint.status);
-        return { success: false, error: 'Checkpoint must be approved before submitting' };
-      }
-      
-      // STEP 2: Fetch training account
-      console.log('[Checkpoint Submit] [STEP 2] BEFORE fetching training account');
-      const { data: trainingAccount, error: trainingError } = await supabase
+    // Prevent duplicate bonus payment - check if already processed
+    if (checkpoint.status === 'completed' || checkpoint.status === 'bonus_paid' || checkpoint.status === 'submitted') {
+      console.log('[Checkpoint Submit] [STEP 1] Checkpoint already processed. Status:', checkpoint.status);
+      console.log('[Checkpoint Submit] [STEP 1] Returning success without adding bonus again');
+      // Return success so frontend can proceed, but don't add bonus again
+      // Get current task number for response
+      const { data: trainingAccount } = await supabase
         .from('training_accounts')
-        .select('*')
+        .select('task_number')
         .eq('auth_user_id', authUserId)
         .single();
-      console.log('[Checkpoint Submit] [STEP 2] AFTER fetching training account');
-      
-      if (trainingError) {
-        console.error('[Checkpoint Submit] [STEP 2] ERROR fetching training account:', trainingError);
-        return { success: false, error: 'Training account error: ' + trainingError.message };
-      }
-      
-      if (!trainingAccount) {
-        console.error('[Checkpoint Submit] [STEP 2] ERROR: No training account found');
-        return { success: false, error: 'Training account not found' };
-      }
-      
-      // RECOVERY: Check if bonus was already paid (from previous failed attempt)
-      // This handles the case where balance was updated but checkpoint status wasn't
-      const { data: existingTransaction } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('user_id', authUserId)
-        .eq('type', 'phase2_checkpoint_bonus')
-        .eq('metadata->>checkpoint_id', checkpointId)
-        .maybeSingle();
-      
-      if (existingTransaction) {
-        console.log('[Checkpoint Submit] [RECOVERY] Found existing bonus transaction:', existingTransaction.id);
-        console.log('[Checkpoint Submit] [RECOVERY] Bonus was already paid, just need to complete checkpoint');
-        
-        // Just update checkpoint status to completed (no bonus added this time)
-        const { error: updateError } = await supabase
-          .from('phase2_checkpoints')
-          .update({ status: 'completed' })
-          .eq('id', checkpointId);
-        
-        if (updateError) {
-          console.error('[Checkpoint Submit] [RECOVERY] Failed to update checkpoint:', updateError);
-          return { success: false, error: 'Failed to complete checkpoint. Please refresh and try again.' };
-        }
-        
-        // Also advance task_number if it hasn't been advanced yet
-        const expectedNextTask = checkpoint.task_number + 1;
-        let finalTaskNumber = trainingAccount.task_number;
-        
-        if (trainingAccount.task_number < expectedNextTask) {
-          console.log('[Checkpoint Submit] [RECOVERY] Advancing task_number from', trainingAccount.task_number, 'to', expectedNextTask);
-          const { error: taskUpdateError } = await supabase
-            .from('training_accounts')
-            .update({ task_number: expectedNextTask })
-            .eq('auth_user_id', authUserId);
-          
-          if (!taskUpdateError) {
-            finalTaskNumber = expectedNextTask;
-          }
-        }
-        
-        console.log('[Checkpoint Submit] [RECOVERY] Checkpoint marked as completed');
-        return {
-          success: true,
-          bonusAmount: 0,
-          nextTaskNumber: finalTaskNumber,
-          message: 'Checkpoint completed. Continuing with next task.'
-        };
-      }
-      
-      console.log('[Checkpoint Submit] [STEP 2] training account found');
-      console.log('[Checkpoint Submit] [STEP 2] current amount:', trainingAccount.amount);
-      console.log('[Checkpoint Submit] [STEP 2] current task_number:', trainingAccount.task_number);
-      
-      // Calculate values
-      const bonusAmount = checkpoint.bonus_amount || 0;
-      const oldBalance = trainingAccount.amount || 0;
-      const newBalance = oldBalance + bonusAmount;
-      const currentTaskNumber = trainingAccount.task_number || 1;
-      const nextTaskNumber = currentTaskNumber + 1;
-      
-      console.log('[Checkpoint Submit] calculated values:');
-      console.log('[Checkpoint Submit]   old balance:', oldBalance);
-      console.log('[Checkpoint Submit]   bonus amount:', bonusAmount);
-      console.log('[Checkpoint Submit]   new balance:', newBalance);
-      console.log('[Checkpoint Submit]   current task:', currentTaskNumber);
-      console.log('[Checkpoint Submit]   next task:', nextTaskNumber);
-      
-      // STEP 3: Update training account (balance + task_number)
-      console.log('[Checkpoint Submit] [STEP 3] BEFORE updating training account');
-      const { data: updatedAccount, error: amountError } = await supabase
-        .from('training_accounts')
-        .update({ 
-          amount: newBalance,
-          task_number: nextTaskNumber
-        })
-        .eq('auth_user_id', authUserId)
-        .select();
-      console.log('[Checkpoint Submit] [STEP 3] AFTER updating training account');
-      
-      if (amountError) {
-        console.error('[Checkpoint Submit] [STEP 3] ERROR updating training account:', amountError);
-        return { success: false, error: 'Failed to update balance: ' + amountError.message };
-      }
-      
-      console.log('[Checkpoint Submit] [STEP 3] training account updated successfully');
-      console.log('[Checkpoint Submit] [STEP 3] updated data:', updatedAccount);
-      
-      // STEP 4: Update checkpoint to completed (CRITICAL - must succeed)
-      // Only update status column which definitely exists in the table
-      // Do NOT use completed_at or updated_at as they may not exist
-      console.log('[Checkpoint Submit] [STEP 4] BEFORE updating checkpoint status');
-      const { data: updatedCheckpoint, error: updateError } = await supabase
-        .from('phase2_checkpoints')
-        .update({
-          status: 'completed'
-        })
-        .eq('id', checkpointId)
-        .select();
-      console.log('[Checkpoint Submit] [STEP 4] AFTER updating checkpoint status');
-      
-      if (updateError) {
-        console.error('[Checkpoint Submit] [STEP 4] ERROR updating checkpoint:', updateError);
-        // CRITICAL: If checkpoint update fails, we must return error to prevent duplicate bonus
-        // The balance was already updated in STEP 3, so we can't easily rollback
-        // But we must tell the frontend it failed so user can retry
-        return { 
-          success: false, 
-          error: 'Checkpoint status update failed. Please refresh and try again. If this persists, contact support.' 
-        };
-      }
-      
-      console.log('[Checkpoint Submit] [STEP 4] checkpoint updated to completed');
-      console.log('[Checkpoint Submit] [STEP 4] updated data:', updatedCheckpoint);
-      
-      // STEP 5: Create transaction record
-      console.log('[Checkpoint Submit] [STEP 5] BEFORE creating transaction');
-      try {
-        const transactionResult = await this.createTransaction({
-          user_id: authUserId,
-          type: 'phase2_checkpoint_bonus',
-          amount: bonusAmount,
-          description: '6x premium checkpoint bonus',
-          status: 'completed',
-          metadata: { 
-            checkpoint_id: checkpointId, 
-            old_amount: oldBalance, 
-            new_amount: newBalance,
-            bonus_amount: bonusAmount,
-            old_task: currentTaskNumber,
-            new_task: nextTaskNumber
-          }
-        });
-        console.log('[Checkpoint Submit] [STEP 5] AFTER creating transaction:', transactionResult);
-      } catch (transactionError) {
-        console.error('[Checkpoint Submit] [STEP 5] ERROR creating transaction:', transactionError);
-        // Don't fail the whole operation if transaction fails
-      }
-      
-      console.log('[Checkpoint Submit] === SUBMISSION COMPLETED SUCCESSFULLY ===');
-      console.log('[Checkpoint Submit] Returning:', { success: true, bonusAmount, oldBalance, newBalance, nextTaskNumber });
-      
-      return { success: true, bonusAmount, oldBalance, newBalance, nextTaskNumber };
-    } catch (error) {
-      console.error('[Checkpoint Submit] === UNEXPECTED EXCEPTION ===');
-      console.error('[Checkpoint Submit] Error:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+      return {
+        success: true,
+        bonusAmount: 0,
+        nextTaskNumber: trainingAccount?.task_number || checkpoint.task_number + 1
+      };
     }
+
+    if (checkpoint.status !== 'approved') {
+      console.error('[Checkpoint Submit] [STEP 1] ERROR: Checkpoint not approved. Status:', checkpoint.status);
+      return { success: false, error: 'Checkpoint must be approved before submitting' };
+    }
+
+    // STEP 2: Fetch training account
+    console.log('[Checkpoint Submit] [STEP 2] BEFORE fetching training account');
+    const { data: trainingAccount, error: trainingError } = await supabase
+      .from('training_accounts')
+      .select('*')
+      .eq('auth_user_id', authUserId)
+      .single();
+    console.log('[Checkpoint Submit] [STEP 2] AFTER fetching training account');
+
+    if (trainingError) {
+      console.error('[Checkpoint Submit] [STEP 2] ERROR fetching training account:', trainingError);
+      return { success: false, error: 'Training account error: ' + trainingError.message };
+    }
+
+    if (!trainingAccount) {
+      console.error('[Checkpoint Submit] [STEP 2] ERROR: No training account found');
+      return { success: false, error: 'Training account not found' };
+    }
+
+    // RECOVERY: Check if bonus was already paid (from previous failed attempt)
+    // This handles the case where balance was updated but checkpoint status wasn't
+    const { data: existingTransaction } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', authUserId)
+      .eq('type', 'phase2_checkpoint_bonus')
+      .eq('metadata->>checkpoint_id', checkpointId)
+      .maybeSingle();
+
+    if (existingTransaction) {
+      console.log('[Checkpoint Submit] [RECOVERY] Found existing bonus transaction:', existingTransaction.id);
+      console.log('[Checkpoint Submit] [RECOVERY] Bonus was already paid, just need to complete checkpoint');
+
+      // Just update checkpoint status to completed (no bonus added this time)
+      const { error: updateError } = await supabase
+        .from('phase2_checkpoints')
+        .update({ status: 'completed' })
+        .eq('id', checkpointId);
+
+      if (updateError) {
+        console.error('[Checkpoint Submit] [RECOVERY] Failed to update checkpoint:', updateError);
+        return { success: false, error: 'Failed to complete checkpoint. Please refresh and try again.' };
+      }
+
+      // Also advance task_number if it hasn't been advanced yet
+      const expectedNextTask = checkpoint.task_number + 1;
+      let finalTaskNumber = trainingAccount.task_number;
+
+      if (trainingAccount.task_number < expectedNextTask) {
+        console.log('[Checkpoint Submit] [RECOVERY] Advancing task_number from', trainingAccount.task_number, 'to', expectedNextTask);
+        const { error: taskUpdateError } = await supabase
+          .from('training_accounts')
+          .update({ task_number: expectedNextTask })
+          .eq('auth_user_id', authUserId);
+
+        if (!taskUpdateError) {
+          finalTaskNumber = expectedNextTask;
+        }
+      }
+
+      console.log('[Checkpoint Submit] [RECOVERY] Checkpoint marked as completed');
+      return {
+        success: true,
+        bonusAmount: 0,
+        nextTaskNumber: finalTaskNumber
+      };
+    }
+
+    console.log('[Checkpoint Submit] [STEP 2] training account found');
+    console.log('[Checkpoint Submit] [STEP 2] current amount:', trainingAccount.amount);
+    console.log('[Checkpoint Submit] [STEP 2] current task_number:', trainingAccount.task_number);
+
+    // Calculate values
+    const bonusAmount = checkpoint.bonus_amount || 0;
+    const oldBalance = trainingAccount.amount || 0;
+    const newBalance = oldBalance + bonusAmount;
+    const currentTaskNumber = trainingAccount.task_number || 1;
+    const nextTaskNumber = currentTaskNumber + 1;
+
+    console.log('[Checkpoint Submit] calculated values:');
+    console.log('[Checkpoint Submit]   old balance:', oldBalance);
+    console.log('[Checkpoint Submit]   bonus amount:', bonusAmount);
+    console.log('[Checkpoint Submit]   new balance:', newBalance);
+    console.log('[Checkpoint Submit]   current task:', currentTaskNumber);
+    console.log('[Checkpoint Submit]   next task:', nextTaskNumber);
+
+    // STEP 3: Update training account (balance + task_number)
+    console.log('[Checkpoint Submit] [STEP 3] BEFORE updating training account');
+    const { data: updatedAccount, error: amountError } = await supabase
+      .from('training_accounts')
+      .update({
+        amount: newBalance,
+        task_number: nextTaskNumber
+      })
+      .eq('auth_user_id', authUserId)
+      .select();
+    console.log('[Checkpoint Submit] [STEP 3] AFTER updating training account');
+
+    if (amountError) {
+      console.error('[Checkpoint Submit] [STEP 3] ERROR updating training account:', amountError);
+      return { success: false, error: 'Failed to update balance: ' + amountError.message };
+    }
+
+    console.log('[Checkpoint Submit] [STEP 3] training account updated successfully');
+    console.log('[Checkpoint Submit] [STEP 3] updated data:', updatedAccount);
+
+    // STEP 4: Update checkpoint to completed (CRITICAL - must succeed)
+    // Only update status column which definitely exists in the table
+    // Do NOT use completed_at or updated_at as they may not exist
+    console.log('[Checkpoint Submit] [STEP 4] BEFORE updating checkpoint status');
+    const { data: updatedCheckpoint, error: updateError } = await supabase
+      .from('phase2_checkpoints')
+      .update({
+        status: 'completed'
+      })
+      .eq('id', checkpointId)
+      .select();
+    console.log('[Checkpoint Submit] [STEP 4] AFTER updating checkpoint status');
+
+    if (updateError) {
+      console.error('[Checkpoint Submit] [STEP 4] ERROR updating checkpoint:', updateError);
+      // CRITICAL: If checkpoint update fails, we must return error to prevent duplicate bonus
+      // The balance was already updated in STEP 3, so we can't easily rollback
+      // But we must tell the frontend it failed so user can retry
+      return {
+        success: false,
+        error: 'Checkpoint status update failed. Please refresh and try again. If this persists, contact support.'
+      };
+    }
+
+    console.log('[Checkpoint Submit] [STEP 4] checkpoint updated to completed');
+    console.log('[Checkpoint Submit] [STEP 4] updated data:', updatedCheckpoint);
+
+    // STEP 5: Create transaction record
+    console.log('[Checkpoint Submit] [STEP 5] BEFORE creating transaction');
+    try {
+      const transactionResult = await this.createTransaction({
+        user_id: authUserId,
+        type: 'phase2_checkpoint_bonus',
+        amount: bonusAmount,
+        description: '6x premium checkpoint bonus',
+        status: 'completed',
+        metadata: {
+          checkpoint_id: checkpointId,
+          old_amount: oldBalance,
+          new_amount: newBalance,
+          bonus_amount: bonusAmount,
+          old_task: currentTaskNumber,
+          new_task: nextTaskNumber
+        }
+      });
+      console.log('[Checkpoint Submit] [STEP 5] AFTER creating transaction:', transactionResult);
+    } catch (transactionError) {
+      console.error('[Checkpoint Submit] [STEP 5] ERROR creating transaction:', transactionError);
+      // Don't fail the whole operation if transaction fails
+    }
+
+    console.log('[Checkpoint Submit] === SUBMISSION COMPLETED SUCCESSFULLY ===');
+    console.log('[Checkpoint Submit] Returning:', { success: true, bonusAmount, oldBalance, newBalance, nextTaskNumber });
+
+    return { success: true, bonusAmount, oldBalance, newBalance, nextTaskNumber };
+  } catch (error) {
+    console.error('[Checkpoint Submit] === UNEXPECTED EXCEPTION ===');
+    console.error('[Checkpoint Submit] Error:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
-  
+
   // Update checkpoint status (for recovery purposes)
   static async updateCheckpointStatus(
-    checkpointId: string, 
+    checkpointId: string,
     status: string
   ): Promise<{ success: boolean; error?: string }> {
     try {

@@ -681,20 +681,21 @@ const allComplete = isTraining
   // Handle checkpoint product submission
   const handleSubmitCheckpointProduct = async () => {
     console.log('[Checkpoint Submit] button clicked');
-    
+
     if (!user?.phase2_checkpoint || !user?.id) {
       console.error('[Checkpoint Submit] Missing user or checkpoint data');
       return;
     }
-    
-    
+
     const checkpointId = user.phase2_checkpoint.id;
     console.log('[Checkpoint Submit] checkpoint id:', checkpointId);
-    
+    console.log('[Checkpoint Submit] passing checkpoint data from frontend state');
+
     try {
       const result = await SupabaseService.submitCheckpointProduct(
         user.id,
-        checkpointId
+        checkpointId,
+        user.phase2_checkpoint // Pass full checkpoint object to avoid hanging fetch
       );
       
       if (result.success) {
