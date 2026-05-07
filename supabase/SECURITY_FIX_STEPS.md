@@ -1,13 +1,13 @@
 # Supabase Security Fix - Step by Step
 
-## Project: angjecpibrcinclcepef
+## Project: ybxshqzwirqfybdeukvq (earnings-live)
 ## Site: https://earnings.ink
 
 ---
 
 ## STEP 1: Go to Supabase SQL Editor
 
-1. Open: https://app.supabase.com/project/angjecpibrcinclcepef
+1. Open: https://app.supabase.com/project/ybxshqzwirqfybdeukvq
 2. Left sidebar → **SQL Editor**
 3. Click **"New query"**
 4. Paste the SQL below

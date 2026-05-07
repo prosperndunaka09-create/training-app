@@ -1,7 +1,7 @@
 -- ============================================
 -- EMERGENCY SECURITY CLEANUP (FIXED)
 -- Removes ALL dangerous public/anonymous policies
--- Project: angjecpibrcinclcepef
+-- Project: ybxshqzwirqfybdeukvq (earnings-live)
 -- ============================================
 
 -- ============================================

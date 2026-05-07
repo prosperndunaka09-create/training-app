@@ -7,7 +7,7 @@ Since Docker is not available on your system, you need to manually set up the cu
 ## 📋 Step-by-Step Instructions:
 
 ### 1. **Access Your Supabase Project**
-- Go to: https://supabase.com/dashboard/project/angjecpibrcinclcepef
+- Go to: https://supabase.com/dashboard/project/ybxshqzwirqfybdeukvq
 - Sign in to your Supabase account
 
 ### 2. **Open SQL Editor**

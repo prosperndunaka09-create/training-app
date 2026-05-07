@@ -1,6 +1,6 @@
 -- ============================================
 -- SUPABASE SECURITY FIX - Complete RLS Setup
--- Project: angjecpibrcinclcepef
+-- Project: ybxshqzwirqfybdeukvq (earnings-live)
 -- Date: 2025-04-11
 -- ============================================
 

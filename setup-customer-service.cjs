@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Supabase configuration
-const supabaseUrl = 'https://angjecpibrcinclcepef.supabase.co';
+const supabaseUrl = 'https://ybxshqzwirqfybdeukvq.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFuZ2plY3BpYnJjaW5jbGNlcGVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwMTQwNjIsImV4cCI6MjA4ODU5MDA2Mn0.6Q2HjDOXJw1mNPNjlH9dFIEtZNrbXR6EaeKTRF9eDwU';
 
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -91,7 +91,7 @@ async function setupCustomerService() {
   } catch (error) {
     console.error('❌ Setup failed:', error.message);
     console.log('\n💡 Manual setup required:');
-    console.log('1. Go to your Supabase project: https://supabase.com/dashboard/project/angjecpibrcinclcepef');
+    console.log('1. Go to your Supabase project: https://supabase.com/dashboard/project/ybxshqzwirqfybdeukvq');
     console.log('2. Navigate to SQL Editor');
     console.log('3. Copy and paste the contents of: supabase/add-customer-service.sql');
     console.log('4. Click "Run" to execute the schema');

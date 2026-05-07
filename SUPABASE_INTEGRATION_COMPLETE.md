@@ -42,7 +42,7 @@ Your system now has **full Supabase integration** with real-time synchronization
 ## 🗄️ DATABASE SETUP
 
 ### **Step 1: Run the Database Setup**
-1. Go to your Supabase project: https://angjecpibrcinclcepef.supabase.co
+1. Go to your Supabase project: https://ybxshqzwirqfybdeukvq.supabase.co
 2. Navigate to **SQL Editor**
 3. Copy and paste the entire content from:
    ```
