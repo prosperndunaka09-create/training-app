@@ -755,52 +755,71 @@ export class SupabaseService {
         .select('vip_level, account_type')
         .eq('id', userId)
         .single();
-      
+
       if (userError) {
         console.error('Error fetching user for VIP level:', userError);
         return false;
       }
-      
+
       const vipLevel = user?.vip_level || 1;
       const isTraining = user?.account_type === 'training';
       const commissionRate = this.getVIPCommissionRate(vipLevel, isTraining);
-      
+
       // Use provided taskCount (default 35 for VIP1 personal accounts)
       // Training accounts can have 45 tasks
       const actualTaskCount = taskCount;
-      
-      // Create training tasks with VIP-based commission rewards
-      // Product prices range from $50 to $150 (realistic product prices)
+
+      // Fetch training products from database
+      const { data: trainingProducts, error: productsError } = await supabase
+        .from('training_products')
+        .select('*')
+        .order('product_number', { ascending: true })
+        .limit(actualTaskCount);
+
+      if (productsError) {
+        console.error('Error fetching training products:', productsError);
+      }
+
+      // Create training tasks using actual product data or fallback to placeholders
       const tasks = Array.from({ length: actualTaskCount }, (_, i) => {
-        // Generate realistic product prices (between $50 and $150)
-        const productPrice = Math.floor(Math.random() * 100) + 50;
-        
+        let productName = `Training Product ${i + 1}`;
+        let productPrice = Math.floor(Math.random() * 100) + 50;
+        let productImage = null;
+
+        // Use actual product data if available
+        if (trainingProducts && trainingProducts[i]) {
+          productName = trainingProducts[i].product_name || productName;
+          productPrice = trainingProducts[i].price || productPrice;
+          productImage = trainingProducts[i].image || null;
+        }
+
         // Calculate reward based on product price and VIP commission rate
         let reward = this.calculateTaskReward(productPrice, vipLevel);
-        
+
         // Add small variation for realism (±10%)
         const variation = (Math.random() - 0.5) * 0.2;
         reward = reward * (1 + variation);
         reward = Math.max(0.25, reward); // Minimum $0.25 per task
-        
+
         return {
           user_id: userId,
           task_number: i + 1,
           reward: Math.round(reward * 100) / 100,
           commission_rate: commissionRate,
           status: i === 0 ? 'pending' : 'locked',
-          product_name: `Training Product ${i + 1}`,
-          product_price: productPrice
+          product_name: productName,
+          product_price: productPrice,
+          product_image: productImage
         };
       });
-      
+
       const { error } = await supabase.from('tasks').insert(tasks);
-      
+
       if (error) {
         console.error('Error creating training tasks:', error);
         return false;
       }
-      
+
       console.log(`[SupabaseService] Created ${actualTaskCount} training tasks for user ${userId} with ${isTraining ? 'Training' : 'VIP' + vipLevel} rate (${commissionRate * 100}%)`);
       return true;
     } catch (error) {
