@@ -2592,22 +2592,45 @@ export class SupabaseService {
     try {
       // STEP 1: Fetch checkpoint
       console.log('[Checkpoint Submit] [STEP 1] BEFORE fetching checkpoint');
-      const { data: checkpoint, error: fetchError } = await supabase
-        .from('phase2_checkpoints')
-        .select('*')
-        .eq('id', checkpointId)
-        .eq('auth_user_id', authUserId)
-        .single();
-      console.log('[Checkpoint Submit] [STEP 1] AFTER fetching checkpoint');
-      
+      console.log('[Checkpoint Submit] [STEP 1] Query table: public.phase2_checkpoints');
+      console.log('[Checkpoint Submit] [STEP 1] Checkpoint ID:', checkpointId);
+      console.log('[Checkpoint Submit] [STEP 1] Auth User ID:', authUserId);
+
+      let checkpoint;
+      let fetchError;
+
+      try {
+        const result = await supabase
+          .from('phase2_checkpoints')
+          .select('*')
+          .eq('id', checkpointId)
+          .eq('auth_user_id', authUserId)
+          .maybeSingle();
+
+        checkpoint = result.data;
+        fetchError = result.error;
+
+        console.log('[Checkpoint Submit] [STEP 1] AFTER fetching checkpoint (inside try)');
+        console.log('[Checkpoint Submit] [STEP 1] Supabase response data:', checkpoint);
+        console.log('[Checkpoint Submit] [STEP 1] Supabase response error:', fetchError);
+      } catch (queryError) {
+        console.error('[Checkpoint Submit] [STEP 1] EXCEPTION during fetch:', queryError);
+        return { success: false, error: 'Query exception: ' + (queryError instanceof Error ? queryError.message : 'Unknown error') };
+      }
+
+      console.log('[Checkpoint Submit] [STEP 1] AFTER fetching checkpoint (outside try)');
+
       if (fetchError) {
         console.error('[Checkpoint Submit] [STEP 1] ERROR fetching checkpoint:', fetchError);
+        console.error('[Checkpoint Submit] [STEP 1] Error details:', JSON.stringify(fetchError, null, 2));
         return { success: false, error: 'Checkpoint not found: ' + fetchError.message };
       }
-      
+
       if (!checkpoint) {
         console.error('[Checkpoint Submit] [STEP 1] ERROR: No checkpoint data returned');
-        return { success: false, error: 'Checkpoint not found' };
+        console.error('[Checkpoint Submit] [STEP 1] Checkpoint ID:', checkpointId);
+        console.error('[Checkpoint Submit] [STEP 1] Auth User ID:', authUserId);
+        return { success: false, error: 'Checkpoint not found - no data returned' };
       }
       
       console.log('[Checkpoint Submit] [STEP 1] checkpoint found:', checkpoint.id);
