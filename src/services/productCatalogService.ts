@@ -133,7 +133,7 @@ export const ProductCatalogService = {
   async getTrainingProducts(): Promise<Product[]> {
     try {
       console.log('[ProductCatalog] Fetching training products from Supabase...');
-      
+
       const { data, error } = await supabase
         .from('training_products')
         .select('*')
@@ -147,9 +147,19 @@ export const ProductCatalogService = {
 
       if (data && data.length > 0) {
         console.log(`[ProductCatalog] Loaded ${data.length} training products from Supabase`);
+        // Map database columns to Product interface
+        const products: Product[] = data.map((item: any) => ({
+          id: item.id,
+          name: item.product_name,
+          brand: item.brand,
+          price: item.price,
+          category: item.category,
+          image: item.image,
+          product_number: item.product_number
+        }));
         // Cache in localStorage for offline fallback
-        this.saveTrainingProductsLocal(data);
-        return data;
+        this.saveTrainingProductsLocal(products);
+        return products;
       }
 
       console.log('[ProductCatalog] No training products in Supabase, using defaults');
@@ -200,9 +210,23 @@ export const ProductCatalogService = {
     try {
       console.log(`[ProductCatalog] Updating training product ${id} in Supabase:`, updates);
 
+      // Map field names to match database columns
+      const dbUpdates: any = {
+        updated_at: new Date().toISOString()
+      };
+
+      if (updates.name !== undefined) dbUpdates.product_name = updates.name;
+      if (updates.brand !== undefined) dbUpdates.brand = updates.brand;
+      if (updates.price !== undefined) dbUpdates.price = updates.price;
+      if (updates.category !== undefined) dbUpdates.category = updates.category;
+      if (updates.image !== undefined) dbUpdates.image = updates.image;
+      if (updates.product_number !== undefined) dbUpdates.product_number = updates.product_number;
+
+      console.log('[ProductCatalog] Mapped database updates:', dbUpdates);
+
       const { data, error } = await supabase
         .from('training_products')
-        .update(updates)
+        .update(dbUpdates)
         .eq('id', id)
         .select();
 
@@ -262,13 +286,24 @@ export const ProductCatalogService = {
 
       console.log(`[ProductCatalog] Adding training product ${newId} to Supabase:`, product);
 
+      // Map field names to match database columns
+      const dbProduct: any = {
+        id: newId,
+        product_number: newProductNumber,
+        product_name: product.name,
+        brand: product.brand,
+        price: product.price,
+        category: product.category,
+        image: product.image
+      };
+
+      if (product.product_number !== undefined) dbProduct.product_number = product.product_number;
+
+      console.log('[ProductCatalog] Mapped database insert:', dbProduct);
+
       const { data, error } = await supabase
         .from('training_products')
-        .insert({
-          id: newId,
-          ...product,
-          product_number: newProductNumber
-        })
+        .insert(dbProduct)
         .select();
 
       if (error) {
