@@ -14,6 +14,12 @@ export interface Product {
   category: string;
   image: string;
   product_number?: number;
+  commission?: number;
+  vip_level?: string;
+  status?: string;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 // ===========================================
@@ -155,7 +161,13 @@ export const ProductCatalogService = {
           price: item.price,
           category: item.category,
           image: item.image,
-          product_number: item.product_number
+          product_number: item.product_number,
+          commission: item.commission,
+          vip_level: item.vip_level,
+          status: item.status,
+          is_active: item.is_active,
+          created_at: item.created_at,
+          updated_at: item.updated_at
         }));
         // Cache in localStorage for offline fallback
         this.saveTrainingProductsLocal(products);
@@ -221,6 +233,10 @@ export const ProductCatalogService = {
       if (updates.category !== undefined) dbUpdates.category = updates.category;
       if (updates.image !== undefined) dbUpdates.image = updates.image;
       if (updates.product_number !== undefined) dbUpdates.product_number = updates.product_number;
+      if (updates.commission !== undefined) dbUpdates.commission = updates.commission;
+      if (updates.vip_level !== undefined) dbUpdates.vip_level = updates.vip_level;
+      if (updates.status !== undefined) dbUpdates.status = updates.status;
+      if (updates.is_active !== undefined) dbUpdates.is_active = updates.is_active;
 
       console.log('[ProductCatalog] Mapped database updates:', dbUpdates);
 
@@ -294,7 +310,11 @@ export const ProductCatalogService = {
         brand: product.brand,
         price: product.price,
         category: product.category,
-        image: product.image
+        image: product.image,
+        commission: product.commission || 0,
+        vip_level: product.vip_level || 'vip2',
+        status: product.status || 'active',
+        is_active: product.is_active !== undefined ? product.is_active : true
       };
 
       if (product.product_number !== undefined) dbProduct.product_number = product.product_number;

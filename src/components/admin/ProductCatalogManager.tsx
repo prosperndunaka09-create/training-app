@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo, memo } from 'react';
-import { 
-  Package, 
-  Edit2, 
-  Trash2, 
-  Plus, 
-  Save, 
-  X, 
-  RefreshCw, 
+import {
+  Package,
+  Edit2,
+  Trash2,
+  Plus,
+  Save,
+  X,
+  RefreshCw,
   Search,
   GraduationCap,
   User,
@@ -17,7 +17,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Crown,
+  ToggleLeft,
+  ToggleRight,
+  Calendar
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,6 +29,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import ProductCatalogService, { Product } from '@/services/productCatalogService';
+import ImageUpload from './ImageUpload';
 
 const ProductCatalogManager: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'training' | 'personal'>('training');
@@ -44,7 +49,11 @@ const ProductCatalogManager: React.FC = () => {
     brand: '',
     price: 0,
     category: '',
-    image: ''
+    image: '',
+    commission: 0,
+    vip_level: 'vip2',
+    status: 'active',
+    is_active: true
   });
 
   // Load products on mount and subscribe to realtime changes
@@ -124,7 +133,11 @@ const ProductCatalogManager: React.FC = () => {
       brand: '',
       price: 0,
       category: '',
-      image: ''
+      image: '',
+      commission: 0,
+      vip_level: 'vip2',
+      status: 'active',
+      is_active: true
     });
   };
 
@@ -254,10 +267,10 @@ const ProductCatalogManager: React.FC = () => {
     <div className="space-y-6">
       {/* Header Stats */}
       <div className="grid grid-cols-3 gap-4">
-        <Card className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 border-blue-500/20">
+        <Card className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 border-blue-500/20 backdrop-blur-xl shadow-lg shadow-blue-500/10 hover:shadow-blue-500/20 transition-all duration-300">
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center shadow-lg shadow-blue-500/20">
                 <GraduationCap className="w-6 h-6 text-blue-400" />
               </div>
               <div>
@@ -268,10 +281,10 @@ const ProductCatalogManager: React.FC = () => {
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border-emerald-500/20">
+        <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border-emerald-500/20 backdrop-blur-xl shadow-lg shadow-emerald-500/10 hover:shadow-emerald-500/20 transition-all duration-300">
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-emerald-500/20 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-emerald-500/20 flex items-center justify-center shadow-lg shadow-emerald-500/20">
                 <User className="w-6 h-6 text-emerald-400" />
               </div>
               <div>
@@ -282,10 +295,10 @@ const ProductCatalogManager: React.FC = () => {
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 border-purple-500/20">
+        <Card className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 border-purple-500/20 backdrop-blur-xl shadow-lg shadow-purple-500/10 hover:shadow-purple-500/20 transition-all duration-300">
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center shadow-lg shadow-purple-500/20">
                 <Layers className="w-6 h-6 text-purple-400" />
               </div>
               <div>
@@ -298,7 +311,7 @@ const ProductCatalogManager: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 p-1 bg-slate-800/50 rounded-xl">
+      <div className="flex gap-2 p-1 bg-slate-800/50 rounded-xl backdrop-blur-xl border border-slate-700/50 shadow-lg">
         <button
           onClick={() => {
             setActiveTab('training');
@@ -308,7 +321,7 @@ const ProductCatalogManager: React.FC = () => {
           }}
           className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-lg font-medium transition-all ${
             activeTab === 'training'
-              ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/25'
+              ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-lg shadow-blue-500/25'
               : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
           }`}
         >
@@ -324,7 +337,7 @@ const ProductCatalogManager: React.FC = () => {
           }}
           className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-lg font-medium transition-all ${
             activeTab === 'personal'
-              ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/25'
+              ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/25'
               : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
           }`}
         >
@@ -344,7 +357,7 @@ const ProductCatalogManager: React.FC = () => {
               setSearchQuery(e.target.value);
               setCurrentPage(1);
             }}
-            className="pl-10 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+            className="pl-10 bg-slate-800/50 border-slate-700/50 text-white placeholder:text-slate-500 focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 backdrop-blur-xl"
           />
         </div>
 
@@ -352,9 +365,9 @@ const ProductCatalogManager: React.FC = () => {
           <Button
             onClick={handleAddNew}
             className={`${
-              activeTab === 'training' 
-                ? 'bg-blue-500 hover:bg-blue-600' 
-                : 'bg-emerald-500 hover:bg-emerald-600'
+              activeTab === 'training'
+                ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 shadow-lg shadow-blue-500/25'
+                : 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-lg shadow-emerald-500/25'
             } text-white`}
           >
             <Plus className="w-4 h-4 mr-2" />
@@ -363,7 +376,7 @@ const ProductCatalogManager: React.FC = () => {
           <Button
             onClick={handleReset}
             variant="outline"
-            className="border-slate-600 text-slate-400 hover:bg-slate-700"
+            className="border-slate-600/50 text-slate-400 hover:bg-slate-700/50 hover:text-white backdrop-blur-xl"
           >
             <RefreshCw className="w-4 h-4 mr-2" />
             Reset Defaults
@@ -373,75 +386,58 @@ const ProductCatalogManager: React.FC = () => {
 
       {/* Edit/Add Form */}
       {(editingProduct || isAddingNew) && (
-        <Card className="bg-slate-800/50 border-slate-700">
+        <Card className="bg-slate-800/50 border-slate-700/50 backdrop-blur-xl shadow-lg shadow-blue-500/10">
           <CardHeader>
-            <CardTitle className="text-white flex items-center gap-2">
-              {isAddingNew ? (
-                <>
-                  <Plus className="w-5 h-5 text-emerald-400" />
-                  Add New {activeTab === 'training' ? 'Training' : 'Personal'} Product
-                </>
-              ) : (
-                <>
-                  <Edit2 className="w-5 h-5 text-blue-400" />
-                  Edit Product
-                </>
-              )}
+            <CardTitle className="text-white">
+              {isAddingNew ? 'Add New Product' : 'Edit Product'}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="text-sm text-slate-400 flex items-center gap-2">
-                  <Package className="w-4 h-4" />
-                  Product Name *
-                </label>
+                <label className="text-sm text-slate-400">Product Name *</label>
                 <Input
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="e.g., iPhone 14 Pro"
-                  className="bg-slate-900/50 border-slate-700 text-white"
+                  placeholder="Enter product name"
+                  className="bg-slate-900/50 border-slate-700/50 text-white focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 backdrop-blur-xl"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-slate-400">Brand *</label>
+                <Input
+                  value={formData.brand}
+                  onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
+                  placeholder="Enter brand name"
+                  className="bg-slate-900/50 border-slate-700/50 text-white focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 backdrop-blur-xl"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-slate-400">Price *</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.price}
+                  onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })}
+                  placeholder="0.00"
+                  className="bg-slate-900/50 border-slate-700/50 text-white focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 backdrop-blur-xl"
                 />
               </div>
 
               <div className="space-y-2">
                 <label className="text-sm text-slate-400 flex items-center gap-2">
                   <Tag className="w-4 h-4" />
-                  Brand *
-                </label>
-                <Input
-                  value={formData.brand}
-                  onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
-                  placeholder="e.g., Apple"
-                  className="bg-slate-900/50 border-slate-700 text-white"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm text-slate-400 flex items-center gap-2">
-                  <DollarSign className="w-4 h-4" />
-                  Price ($)
-                </label>
-                <Input
-                  type="number"
-                  value={formData.price}
-                  onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })}
-                  placeholder="0.00"
-                  className="bg-slate-900/50 border-slate-700 text-white"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm text-slate-400 flex items-center gap-2">
-                  <Layers className="w-4 h-4" />
                   Category
                 </label>
                 <Input
+                  list="categories"
                   value={formData.category}
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                  placeholder="e.g., Electronics"
-                  list="categories"
-                  className="bg-slate-900/50 border-slate-700 text-white"
+                  placeholder="Select or enter category"
+                  className="bg-slate-900/50 border-slate-700/50 text-white focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 backdrop-blur-xl"
                 />
                 <datalist id="categories">
                   {categories.map(cat => (
@@ -451,58 +447,111 @@ const ProductCatalogManager: React.FC = () => {
               </div>
 
               <div className="space-y-2 md:col-span-2">
-                <label className="text-sm text-slate-400 flex items-center gap-2">
-                  <ImageIcon className="w-4 h-4" />
-                  Image URL *
-                </label>
-                <Input
-                  value={formData.image}
-                  onChange={(e) => setFormData({ ...formData, image: e.target.value })}
-                  placeholder="https://..."
-                  className="bg-slate-900/50 border-slate-700 text-white"
+                <ImageUpload
+                  currentImageUrl={formData.image}
+                  onImageUrlChange={(url) => setFormData({ ...formData, image: url })}
+                  productName={formData.name}
+                  productId={editingProduct?.id}
                 />
               </div>
-            </div>
 
-            {/* Image Preview */}
-            {formData.image && (
-              <div className="mt-4">
-                <p className="text-sm text-slate-400 mb-2">Preview:</p>
-                <div className="relative w-32 h-32 rounded-xl overflow-hidden bg-slate-900">
-                  <img 
-                    src={formData.image} 
-                    alt="Preview" 
-                    className="w-full h-full object-cover"
-                    loading="eager"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.style.display = 'none';
-                      const parent = target.parentElement;
-                      if (parent) {
-                        parent.innerHTML = `<div class="w-full h-full flex items-center justify-center bg-slate-800 text-slate-500 text-xs">Failed to load</div>`;
-                      }
-                    }}
-                  />
+              <div className="space-y-2">
+                <label className="text-sm text-slate-400">Commission ($)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.commission || 0}
+                  onChange={(e) => setFormData({ ...formData, commission: parseFloat(e.target.value) || 0 })}
+                  placeholder="0.00"
+                  className="bg-slate-900/50 border-slate-700/50 text-white focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 backdrop-blur-xl"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-slate-400 flex items-center gap-2">
+                  <Crown className="w-4 h-4" />
+                  VIP Level
+                </label>
+                <select
+                  value={formData.vip_level || 'vip2'}
+                  onChange={(e) => setFormData({ ...formData, vip_level: e.target.value })}
+                  className="w-full bg-slate-900/50 border-slate-700/50 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500/20 backdrop-blur-xl"
+                >
+                  <option value="vip1">VIP1 (0.5%)</option>
+                  <option value="vip2">VIP2 (1.0%)</option>
+                  <option value="vip3">VIP3 (1.5%)</option>
+                  <option value="vip4">VIP4 (2.0%)</option>
+                  <option value="vip5">VIP5 (2.5%)</option>
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-slate-400 flex items-center gap-2">
+                  <Layers className="w-4 h-4" />
+                  Status
+                </label>
+                <select
+                  value={formData.status || 'active'}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  className="w-full bg-slate-900/50 border-slate-700/50 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500/20 backdrop-blur-xl"
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                  <option value="draft">Draft</option>
+                </select>
+              </div>
+
+              <div className="space-y-2 md:col-span-2">
+                <label className="text-sm text-slate-400 flex items-center gap-2">
+                  <ToggleLeft className="w-4 h-4" />
+                  Enable Product
+                </label>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, is_active: true })}
+                    className={`flex-1 py-2 px-4 rounded-lg font-medium transition-all ${
+                      formData.is_active
+                        ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/25'
+                        : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700/50 backdrop-blur-xl border border-slate-700/50'
+                    }`}
+                  >
+                    <ToggleRight className="w-4 h-4 inline mr-2" />
+                    Enabled
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, is_active: false })}
+                    className={`flex-1 py-2 px-4 rounded-lg font-medium transition-all ${
+                      !formData.is_active
+                        ? 'bg-gradient-to-r from-red-500 to-red-600 text-white shadow-lg shadow-red-500/25'
+                        : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700/50 backdrop-blur-xl border border-slate-700/50'
+                    }`}
+                  >
+                    <ToggleLeft className="w-4 h-4 inline mr-2" />
+                    Disabled
+                  </button>
                 </div>
               </div>
-            )}
+            </div>
 
             <div className="flex gap-3 pt-4">
               <Button
                 onClick={handleSave}
                 className={`${
-                  activeTab === 'training' 
-                    ? 'bg-blue-500 hover:bg-blue-600' 
-                    : 'bg-emerald-500 hover:bg-emerald-600'
+                  activeTab === 'training'
+                    ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 shadow-lg shadow-blue-500/25'
+                    : 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-lg shadow-emerald-500/25'
                 } text-white`}
               >
                 <Save className="w-4 h-4 mr-2" />
-                Save Product
+                {isSaving ? 'Saving...' : 'Save Product'}
               </Button>
               <Button
                 onClick={handleCancel}
                 variant="outline"
-                className="border-slate-600 text-slate-400 hover:bg-slate-700"
+                className="border-slate-600/50 text-slate-400 hover:bg-slate-700/50 hover:text-white backdrop-blur-xl"
               >
                 <X className="w-4 h-4 mr-2" />
                 Cancel
@@ -531,50 +580,31 @@ const ProductCatalogManager: React.FC = () => {
               return (
                 <div
                   key={product.id}
-                  className="group relative bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-slate-600 transition-all"
+                  className="group relative bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden hover:border-blue-500/50 transition-all duration-300 backdrop-blur-xl shadow-lg hover:shadow-blue-500/10"
                 >
-                  {/* Product Number Badge */}
-                  <div className="absolute top-2 left-2 z-10">
-                    <Badge className={`${
-                      activeTab === 'training' 
-                        ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' 
-                        : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                    }`}>
-                      #{globalIndex}
-                    </Badge>
-                  </div>
-
                   {/* Actions */}
-                  <div className="absolute top-2 right-2 z-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
                     <button
                       onClick={() => handleEdit(product)}
-                      className="p-2 bg-slate-800/90 hover:bg-blue-500/20 rounded-lg text-slate-400 hover:text-blue-400 transition-colors"
+                      className="p-2 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 rounded-lg text-white shadow-lg shadow-blue-500/25 transition-all"
                     >
                       <Edit2 className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => handleDelete(product.id)}
-                      className="p-2 bg-slate-800/90 hover:bg-red-500/20 rounded-lg text-slate-400 hover:text-red-400 transition-colors"
+                      className="p-2 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-lg text-white shadow-lg shadow-red-500/25 transition-all"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
 
                   {/* Image */}
-                  <div 
-                    className="bg-slate-800/50 relative overflow-hidden"
-                    style={{ aspectRatio: '1/1', minHeight: '200px' }}
-                  >
+                  <div className="relative w-full h-48 bg-slate-900 overflow-hidden">
                     <img
                       src={product.image}
                       alt={product.name}
-                      className="absolute inset-0 w-full h-full object-cover"
-                      style={{ objectFit: 'cover', objectPosition: 'center' }}
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                       loading="lazy"
-                      decoding="async"
-                      onLoad={(e) => {
-                        (e.target as HTMLImageElement).style.opacity = '1';
-                      }}
                       onError={(e) => {
                         const target = e.target as HTMLImageElement;
                         target.style.display = 'none';
@@ -587,18 +617,59 @@ const ProductCatalogManager: React.FC = () => {
                   </div>
 
                   {/* Info */}
-                  <div className="p-4 space-y-2">
-                    <h3 className="font-semibold text-white truncate" title={product.name}>
-                      {product.name}
-                    </h3>
-                    <p className="text-sm text-slate-400">{product.brand}</p>
+                  <div className="p-4 space-y-3">
+                    <div>
+                      <h3 className="font-semibold text-white truncate" title={product.name}>
+                        {product.name}
+                      </h3>
+                      <p className="text-sm text-slate-400">{product.brand}</p>
+                    </div>
+
                     <div className="flex items-center justify-between">
-                      <Badge variant="outline" className="border-slate-600 text-slate-400">
+                      <Badge variant="outline" className="border-slate-600/50 text-slate-400 backdrop-blur-xl">
                         {product.category}
                       </Badge>
-                      <span className="text-emerald-400 font-semibold">
+                      <span className="text-emerald-400 font-semibold shadow-lg shadow-emerald-500/10">
                         ${product.price.toFixed(2)}
                       </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="bg-slate-900/50 rounded-lg p-2 border border-slate-700/50 backdrop-blur-xl">
+                        <p className="text-slate-500 mb-1">Commission</p>
+                        <p className="text-white font-semibold">${(product.commission || 0).toFixed(2)}</p>
+                      </div>
+                      <div className="bg-slate-900/50 rounded-lg p-2 border border-slate-700/50 backdrop-blur-xl">
+                        <p className="text-slate-500 mb-1">VIP Level</p>
+                        <p className="text-blue-400 font-semibold uppercase shadow-lg shadow-blue-500/10">{product.vip_level || 'VIP2'}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          className={`${
+                            product.status === 'active'
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 shadow-lg shadow-emerald-500/10'
+                              : product.status === 'inactive'
+                              ? 'bg-red-500/20 text-red-400 border-red-500/30 shadow-lg shadow-red-500/10'
+                              : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30 shadow-lg shadow-yellow-500/10'
+                          } backdrop-blur-xl`}
+                        >
+                          {product.status || 'Active'}
+                        </Badge>
+                        {product.is_active !== false ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shadow-lg shadow-emerald-500/10" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 text-red-400 shadow-lg shadow-red-500/10" />
+                        )}
+                      </div>
+                      {product.created_at && (
+                        <span className="text-slate-500 flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          {new Date(product.created_at).toLocaleDateString()}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -621,19 +692,19 @@ const ProductCatalogManager: React.FC = () => {
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-400 hover:bg-slate-700/50 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed backdrop-blur-xl transition-all"
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
-              
+
               <span className="text-slate-400">
                 Page {currentPage} of {totalPages}
               </span>
-              
+
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
-                className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-400 hover:bg-slate-700/50 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed backdrop-blur-xl transition-all"
               >
                 <ChevronRight className="w-5 h-5" />
               </button>
