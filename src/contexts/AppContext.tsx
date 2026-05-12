@@ -585,31 +585,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (trainingAccount && !trainingError) {
           console.log('[loadUserData] Training account found:', trainingAccount);
 
-          // Use training account values directly from database
-          // training_accounts.amount stores earned rewards only, not total balance
-          const earnedRewards = trainingAccount.amount || 0;
+          // Use users.balance as source of truth - do NOT calculate from training_accounts.amount
           const trainingTaskNumber = trainingAccount.task_number || 1; // Next task to complete
           const completedTasks = Math.max(0, trainingTaskNumber - 1);
-          const INITIAL_TRAINING_BALANCE = 1100;
-          const totalBalance = INITIAL_TRAINING_BALANCE + earnedRewards;
 
-          console.log('[loadUserData] Training data from DB - Earned rewards:', earnedRewards, 'Total balance:', totalBalance, 'Next task:', trainingTaskNumber, 'Completed:', completedTasks);
+          console.log('[loadUserData] Training data from DB - Balance from users table:', dbUser.balance, 'Next task:', trainingTaskNumber, 'Completed:', completedTasks);
 
           // Update user state with training account data
           setUser(prev => prev ? {
             ...prev,
-            balance: totalBalance, // Total balance = initial + earned
+            balance: dbUser.balance, // Use balance from users table as source of truth
             tasks_completed: completedTasks, // Calculate from task_number
             task_number: trainingTaskNumber, // Next task to complete
-            total_earned: earnedRewards, // Total earned is just the earned rewards
+            total_earned: dbUser.total_earned, // Use total_earned from users table
             is_training_account: true,
           } : null);
 
-          // Update wallet state with training account balance
+          // Update wallet state with training account balance from users table
           const trainingWallet: WalletState = {
-            available_balance: totalBalance,
+            available_balance: dbUser.balance, // Use balance from users table as source of truth
             pending_balance: 0,
-            total_earned: earnedRewards, // Total earned is just the earned rewards
+            total_earned: dbUser.total_earned, // Use total_earned from users table
             total_withdrawn: 0,
             transactions: []
           };
@@ -917,6 +913,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setIsAuthenticated(true);
         await loadUserData(trainingUser.id, 'training', trainingUser.email);
       } else {
+        // Fetch user data from users table to get balance
+        const { data: userData } = await supabase
+          .from('users')
+          .select('balance, total_earned')
+          .eq('id', authData.user.id)
+          .single();
+
         // Use training account data from database
         const trainingUser: User = {
           id: authData.user.id,
@@ -924,8 +927,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           phone: null,
           display_name: trainingAccount.email.split('@')[0] || 'Training User',
           vip_level: 2 as const,
-          balance: trainingAccount.amount || 0,
-          total_earned: trainingAccount.amount || 0,
+          balance: userData?.balance || 0, // Use balance from users table as source of truth
+          total_earned: userData?.total_earned || 0, // Use total_earned from users table as source of truth
           referral_code: '',
           created_at: trainingAccount.created_at,
           account_type: 'training',
@@ -1610,22 +1613,21 @@ else if (
           console.log('[refreshUser] Training account data from Supabase:', trainingAccount);
           const trainingTaskNumber = trainingAccount.task_number || 1;
           const completedTasks = Math.max(0, trainingTaskNumber - 1);
-          const INITIAL_TRAINING_BALANCE = 1100;
-          const earnedRewards = trainingAccount.amount || 0;
           
-          // Fetch current total_earned from database to preserve accumulated earnings
+          // Fetch current balance and total_earned from database to use as source of truth
           const { data: dbUser } = await supabase
             .from('users')
-            .select('total_earned')
+            .select('balance, total_earned')
             .eq('id', user.id)
             .single();
           
+          const dbBalance = dbUser?.balance || 0;
           const dbTotalEarned = dbUser?.total_earned || 0;
           
           setUser(prev => prev ? {
             ...prev,
-            balance: INITIAL_TRAINING_BALANCE + earnedRewards, // Total balance = initial + earned
-            total_earned: dbTotalEarned, // Preserve database total_earned, do NOT recalculate
+            balance: dbBalance, // Use balance from users table as source of truth
+            total_earned: dbTotalEarned, // Use total_earned from users table as source of truth
             task_number: trainingTaskNumber, // Next task to complete
             tasks_completed: completedTasks, // Calculate from task_number
             training_progress: completedTasks, // Use calculated value

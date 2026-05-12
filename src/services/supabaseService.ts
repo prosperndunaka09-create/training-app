@@ -818,15 +818,15 @@ export class SupabaseService {
     try {
       const { data: trainingAccount } = await supabase
         .from('training_accounts')
-        .select('task_number, amount, total_tasks')
+        .select('task_number, total_tasks')
         .eq('auth_user_id', authUserId)
         .maybeSingle();
 
       if (trainingAccount) {
-        console.log('[applyTrainingAccountOverride] Found training account, overriding balance and tasks');
+        console.log('[applyTrainingAccountOverride] Found training account, overriding tasks only (not balance)');
         return {
           ...userData,
-          balance: trainingAccount.amount || 0,
+          // Keep balance from users table - do NOT override with training_accounts.amount
           tasks_completed: trainingAccount.task_number || 0,
           total_tasks: trainingAccount.total_tasks || 45,
           account_type: 'training',
