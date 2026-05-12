@@ -34,11 +34,14 @@ const WithdrawalSection: React.FC = () => {
   const isTraining = user?.account_type === 'training';
   const isPersonal = user?.account_type === 'personal';
   
+  // Use total_tasks from database
+  const totalTasks = user?.total_tasks || 45;
+  
   // Training accounts: BOTH sets must be completed (90/90 tasks total = SET 1 + SET 2)
   // Personal accounts: 35/35 tasks required
   const trainingFullyCompleted = user?.training_completed === true || 
-    (user?.training_phase === 2 && completedCount === 45 && safeTasks.length === 45);
-  const personalTasksComplete = completedCount === 35 && safeTasks.length === 35;
+    (user?.training_phase === 2 && completedCount === 45);
+  const personalTasksComplete = completedCount === totalTasks;
   
   const allTasksComplete = isTraining ? trainingFullyCompleted : personalTasksComplete;
   // Check for primary wallet first, then fall back to any wallet if primary not found
@@ -177,9 +180,9 @@ const WithdrawalSection: React.FC = () => {
               <div>
                 <p className="text-sm font-semibold text-amber-400">Tasks Incomplete</p>
                 <p className="text-xs text-gray-400 mt-1">
-                  {isTraining 
+                  {isTraining
                     ? `You need to complete all 90 training tasks (SET 1 and SET 2) before you can withdraw. You are currently in SET ${user?.training_phase || 1} with ${completedCount}/45 tasks completed.`
-                    : `You need to complete all 35 VIP1 tasks before you can withdraw. You have completed ${completedCount}/35 tasks.`
+                    : `You need to complete all ${user?.total_tasks || 35} VIP${user?.vip_level || 1} tasks before you can withdraw. You have completed ${completedCount}/${user?.total_tasks || 35} tasks.`
                   }
                 </p>
                 <button

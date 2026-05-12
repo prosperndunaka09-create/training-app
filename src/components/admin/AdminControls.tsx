@@ -74,11 +74,18 @@ const AdminControls: React.FC<AdminControlsProps> = ({ onRefresh }) => {
   const [balanceAmount, setBalanceAmount] = useState(100);
   const [balanceReason, setBalanceReason] = useState('');
 
+  // Manual Financial Reset State
+  const [manualResetEmail, setManualResetEmail] = useState('');
+  const [manualBalance, setManualBalance] = useState('1366.91');
+  const [manualTotalEarned, setManualTotalEarned] = useState('0');
+  const [manualPendingBalance, setManualPendingBalance] = useState('0');
+  const [isManualResetting, setIsManualResetting] = useState(false);
+
   // Training Settings State
   const [trainingSettings, setTrainingSettings] = useState({
     checkpoint_multiplier: 6,
     training_completion_percentage: 2,
-    phase2_target_final_balance: 2431.20,
+    phase2_target_final_balance: 2423.30,
     checkpoint_bonus_mode: 'dynamic'
   });
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
@@ -974,6 +981,96 @@ const AdminControls: React.FC<AdminControlsProps> = ({ onRefresh }) => {
     onRefresh();
   };
 
+  const manualResetFinancialValues = async () => {
+    if (!manualResetEmail.trim()) {
+      toast.error('Please enter a training account email address');
+      return;
+    }
+
+    setIsManualResetting(true);
+    try {
+      const email = manualResetEmail.trim().toLowerCase();
+      const balance = parseFloat(manualBalance);
+      const totalEarned = parseFloat(manualTotalEarned);
+      const pendingBalance = parseFloat(manualPendingBalance);
+
+      if (isNaN(balance) || isNaN(totalEarned) || isNaN(pendingBalance)) {
+        toast.error('Please enter valid numeric values');
+        setIsManualResetting(false);
+        return;
+      }
+
+      console.log('[Admin Manual Reset] Updating training account financial values:', {
+        email,
+        balance,
+        totalEarned,
+        pendingBalance
+      });
+
+      // Find training account in Supabase
+      const { data: trainingAccount, error: findError } = await supabase
+        .from('training_accounts')
+        .select('*')
+        .eq('email', email)
+        .single();
+
+      if (findError || !trainingAccount) {
+        toast.error('Training account not found in database');
+        setIsManualResetting(false);
+        return;
+      }
+
+      // Update training_accounts table
+      const { error: updateError } = await supabase
+        .from('training_accounts')
+        .update({
+          amount: balance,
+          commission: totalEarned,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', trainingAccount.id);
+
+      if (updateError) {
+        console.error('[Admin Manual Reset] Error updating training_accounts:', updateError);
+        toast.error('Failed to update training account: ' + updateError.message);
+        setIsManualResetting(false);
+        return;
+      }
+
+      // Update users table for pending_balance
+      const { data: user, error: userFindError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', email)
+        .eq('account_type', 'training')
+        .single();
+
+      if (!userFindError && user) {
+        const { error: userUpdateError } = await supabase
+          .from('users')
+          .update({
+            pending_amount: pendingBalance,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', user.id);
+
+        if (userUpdateError) {
+          console.error('[Admin Manual Reset] Error updating users pending_balance:', userUpdateError);
+        }
+      }
+
+      toast.success(`✅ Financial values updated for ${email}\n\nBalance: $${balance.toFixed(2)}\nTotal Earned: $${totalEarned.toFixed(2)}\nPending Balance: $${pendingBalance.toFixed(2)}`);
+      console.log('[Admin Manual Reset] Successfully updated financial values');
+      setManualResetEmail('');
+      onRefresh();
+    } catch (error) {
+      console.error('[Admin Manual Reset] Exception:', error);
+      toast.error('Failed to update financial values: ' + (error as Error).message);
+    } finally {
+      setIsManualResetting(false);
+    }
+  };
+
   // ===========================================
   // TRAINING SETTINGS FUNCTIONS
   // ===========================================
@@ -1150,6 +1247,109 @@ const AdminControls: React.FC<AdminControlsProps> = ({ onRefresh }) => {
           </CardContent>
         </Card>
 
+        {/* Manual Financial Reset */}
+        <Card className="bg-slate-800/50 border-slate-700">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center">
+              <DollarSign className="w-5 h-5 mr-2 text-yellow-500" />
+              Manual Financial Reset
+            </CardTitle>
+            <p className="text-slate-400 text-sm">
+              Manually set training account financial values for testing
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Training Account Email
+              </label>
+              <Input
+                type="email"
+                value={manualResetEmail}
+                onChange={(e) => setManualResetEmail(e.target.value)}
+                placeholder="ronikaa22@gmail.com"
+                className="bg-slate-700 border-slate-600 text-white"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Balance ($)
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={manualBalance}
+                  onChange={(e) => setManualBalance(e.target.value)}
+                  placeholder="1366.91"
+                  className="bg-slate-700 border-slate-600 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Total Earned ($)
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={manualTotalEarned}
+                  onChange={(e) => setManualTotalEarned(e.target.value)}
+                  placeholder="0"
+                  className="bg-slate-700 border-slate-600 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Pending Balance ($)
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={manualPendingBalance}
+                  onChange={(e) => setManualPendingBalance(e.target.value)}
+                  placeholder="0"
+                  className="bg-slate-700 border-slate-600 text-white"
+                />
+              </div>
+            </div>
+
+            <Button
+              onClick={manualResetFinancialValues}
+              disabled={isManualResetting}
+              className="w-full bg-yellow-600 hover:bg-yellow-700"
+            >
+              {isManualResetting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                  Updating...
+                </>
+              ) : (
+                <>
+                  <DollarSign className="w-4 h-4 mr-2" />
+                  Update Financial Values
+                </>
+              )}
+            </Button>
+
+            <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+              <div className="flex items-start space-x-2">
+                <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5" />
+                <div>
+                  <p className="text-yellow-400 text-sm font-medium">Use Case:</p>
+                  <ul className="text-yellow-300 text-xs space-y-1 mt-1">
+                    <li>• Testing training/checkpoint flows without preserving inflated balances</li>
+                    <li>• Manually set balance, total_earned, and pending_balance for specific users</li>
+                    <li>• Admin only - no effect on global training settings</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* System Controls */}
         <Card className="bg-slate-800/50 border-slate-700">
           <CardHeader>
@@ -1238,7 +1438,7 @@ const AdminControls: React.FC<AdminControlsProps> = ({ onRefresh }) => {
                       value={trainingSettings.phase2_target_final_balance}
                       onChange={(e) => setTrainingSettings(prev => ({
                         ...prev,
-                        phase2_target_final_balance: parseFloat(e.target.value) || 2431.20
+                        phase2_target_final_balance: parseFloat(e.target.value) || 2423.30
                       }))}
                       className="bg-slate-700 border-slate-600 text-white w-32"
                     />

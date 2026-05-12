@@ -549,11 +549,10 @@ const progress = totalTasks > 0
 
 const allComplete = displayCompletedCount === totalTasks;
   
-  // NEW: Check if user has completed training (for non-training accounts)
-  // ALL personal accounts must complete training before accessing tasks
-  // Unlock if training_completed OR commission_transferred is true
-  const canSubmitTasks = isTraining || user?.training_completed === true || user?.commission_transferred === true;
-  const needsTraining = !isTraining && !user?.training_completed && !user?.commission_transferred;
+  // Personal VIP1 accounts now have normal workflow - no training requirements
+  // Personal accounts can access tasks immediately
+  const canSubmitTasks = true; // All accounts can submit tasks
+  const needsTraining = false; // No training lock for personal accounts
 
   const handleSubmit = async (e?: React.MouseEvent) => {
     // STOP EVENT BUBBLING: Prevent duplicate triggers from parent containers
@@ -576,15 +575,8 @@ const allComplete = displayCompletedCount === totalTasks;
     setPendingCompletionTask(pendingTask.task_number);
     
     try {
-      // BLOCK task submission if VIP1 account is locked (waiting for linked VIP2 training to complete)
-      if (user?.vip_level === 1 && user?.account_type === 'personal' && user?.tasks_locked) {
-        toast({
-          title: 'Tasks Locked',
-          description: 'Your account is locked until your linked training account completes the full training cycle. Contact customer service for more information.',
-          variant: 'destructive',
-        });
-        return;
-      }
+      // Personal VIP1 accounts now have normal workflow - no training lock blocking
+      // Training lock logic removed - personal accounts can complete tasks immediately
     
       // Only check for checkpoint blocking in Phase 2
       const isPhase2 = Number(user?.training_phase) === 2;

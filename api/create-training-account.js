@@ -113,14 +113,10 @@ export default async function handler(req, res) {
         account_type: 'training',
         user_status: 'active',
         vip_level: 2,
-        balance: 1100,
-        total_earned: 0,
         referral_code: newReferralCode,
         
         training_completed: false,
         training_progress: 0,
-        training_phase: 1,
-        tasks_completed: 0,
         trigger_task_number: null,
         has_pending_order: false,
         pending_amount: 0,
@@ -155,7 +151,7 @@ export default async function handler(req, res) {
       console.log('[CreateTrainingAccount] STEP 4: Training account already exists, reusing:', existingTrainingAccount);
       trainingAccount = existingTrainingAccount;
     } else {
-      // Insert into training_accounts table
+      // Insert into training_accounts table with minimal fields - let database handle defaults
       console.log('[CreateTrainingAccount] STEP 4: Inserting into training_accounts');
       const { data: newTrainingAccount, error: trainingError } = await supabase
         .from('training_accounts')
@@ -166,17 +162,15 @@ export default async function handler(req, res) {
           referral_code: newReferralCode,
           created_by: 'admin',
           assigned_to: 'admin',
-          task_number: 1,
-          product_name: 'training',
-          amount: 1100,
-          commission: 0,
-          status: 'active',
-          total_tasks: 45,
-          progress: 0,
-          completed: false,
-          training_phase: 1,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          status: 'active'
+          // Database defaults handle:
+          // - amount: 1100.00 (balance)
+          // - total_tasks: 45
+          // - task_number: 1
+          // - commission: 0
+          // - progress: 0
+          // - completed: false
+          // - training_phase: 1
         })
         .select()
         .single();

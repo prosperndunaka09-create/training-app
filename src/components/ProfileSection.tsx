@@ -71,12 +71,12 @@ const ProfileSection: React.FC = () => {
           <p className="text-xs text-gray-500 font-medium">Tasks Done</p>
           <p className="text-xl font-bold text-purple-400">
             {user?.account_type === 'training'
-              ? user?.training_completed === true || (user?.training_phase === 2 && (user?.task_number ?? 1) >= 45)
+              ? user?.training_completed === true || (user?.training_phase === 2 && (user?.task_number ?? 1) >= (user?.total_tasks || 45))
                 ? 'TRAINING COMPLETE'
                 : user?.training_phase === 2 && (user?.task_number ?? 1) === 0
                 ? 'SET 1 COMPLETED'
                 : `SET ${user?.training_phase || 1}/${user?.task_number ?? 1}`
-              : `${completedCount}/35`}
+              : `${completedCount}/${user?.total_tasks || 35}`}
           </p>
         </div>
         <div className="p-5 bg-white/[0.03] border border-white/[0.06] rounded-2xl">

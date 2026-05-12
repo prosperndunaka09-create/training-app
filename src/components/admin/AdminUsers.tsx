@@ -6,6 +6,7 @@ import { Input } from '../ui/input';
 import { Badge } from '../ui/badge';
 import { Alert, AlertDescription } from '../ui/alert';
 import { toast } from 'sonner';
+import { TelegramService } from '@/services/telegramService';
 import {
   Shield,
   Users,
@@ -84,10 +85,19 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
   // Check authentication state on mount
   useEffect(() => {
     const checkAuth = async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
-      console.log('[AdminUsers] ADMIN SESSION:', sessionData.session ? 'Authenticated' : 'Not authenticated');
-      console.log('[AdminUsers] Session data:', sessionData);
-      setIsAuthenticated(!!sessionData.session);
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        console.log('[AdminUsers] ADMIN SESSION:', sessionData.session ? 'Authenticated' : 'Not authenticated');
+        console.log('[AdminUsers] Session data:', sessionData);
+        setIsAuthenticated(!!sessionData.session);
+      } catch (error) {
+        console.error('[AdminUsers] Session check error:', error);
+        // Clear stale session and tokens on any error
+        await supabase.auth.signOut();
+        localStorage.removeItem('supabase.auth.token');
+        sessionStorage.removeItem('supabase.auth.token');
+        setIsAuthenticated(false);
+      }
     };
 
     checkAuth();
@@ -195,6 +205,12 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
       }
 
       toast.success(`${email} has been suspended`);
+      
+      // Send Telegram notification
+      TelegramService.sendAdminNotification('Admin', 'User Suspended', `User ${email} status changed to Suspended`).catch(err => {
+        console.error('Failed to send Telegram notification:', err);
+      });
+      
       loadUsers();
     } catch (error) {
       console.error('Error suspending user:', error);
@@ -243,6 +259,12 @@ const AdminUsers: React.FC<AdminUsersProps> = ({ onLogout }) => {
       }
 
       toast.success(`${email} has been activated`);
+      
+      // Send Telegram notification
+      TelegramService.sendAdminNotification('Admin', 'User Activated', `User ${email} status changed to Active`).catch(err => {
+        console.error('Failed to send Telegram notification:', err);
+      });
+      
       loadUsers();
     } catch (error) {
       console.error('Error activating user:', error);

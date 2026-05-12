@@ -10,6 +10,7 @@ import AdminStatsCards, { PlatformStats } from './AdminStatsCards';
 import AdminUsersTable, { AdminUser } from './AdminUsersTable';
 import AdminWithdrawalsTable, { AdminWithdrawal } from './AdminWithdrawalsTable';
 import UserDetailsModal from './UserDetailsModal';
+import SupabaseService from '@/services/supabaseService';
 
 // Mock data for demo when backend has no data
 const generateMockUsers = (): AdminUser[] => {
@@ -241,6 +242,82 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handleResetPhase1 = async (user: AdminUser) => {
+    if (user.account_type !== 'training' || user.vip_level !== 2) {
+      toast({ title: 'Error', description: 'Only VIP2 training accounts can reset Phase 1', variant: 'destructive' });
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to unlock Phase 1 and start Phase 2 for ${user.display_name} (${user.email})?\n\nThis will:\n- Unlock Phase 1 lock\n- Move to Phase 2\n- Reset tasks to 0/45\n- Create new Phase 2 tasks\n- Preserve balance and earnings\n\nThe user will see Phase 2 immediately when they refresh.`)) {
+      return;
+    }
+
+    try {
+      const result = await SupabaseService.resetPhase1ForUser(user.id);
+      
+      if (result.success) {
+        // Update the user in the local state
+        setUsers(prev => prev.map(u => 
+          u.id === user.id 
+            ? { ...u, training_phase_1_locked: false, training_phase: 2, tasks_completed: 0, training_progress: 0 }
+            : u
+        ));
+        
+        toast({ 
+          title: 'Phase 1 Unlocked Successfully', 
+          description: `${user.display_name} can now proceed to Phase 2.` 
+        });
+      } else {
+        throw new Error(result.error);
+      }
+    } catch (error) {
+      console.error('Error resetting Phase 1:', error);
+      toast({ 
+        title: 'Error', 
+        description: 'Failed to unlock Phase 1. Please try again.', 
+        variant: 'destructive' 
+      });
+    }
+  };
+
+  const handleClearPhase2Checkpoint = async (user: AdminUser) => {
+    if (user.account_type !== 'training' || user.vip_level !== 2) {
+      toast({ title: 'Error', description: 'Only VIP2 training accounts can clear Phase 2 checkpoint', variant: 'destructive' });
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to clear the Phase 2 checkpoint for ${user.display_name} (${user.email})?\n\nThis will:\n- Clear the checkpoint status\n- Trigger the 6x profit multiplier\n- Allow user to continue Phase 2 tasks\n\nThe user will see the multiplier applied immediately.`)) {
+      return;
+    }
+
+    try {
+      const result = await SupabaseService.clearPhase2Checkpoint(user.id);
+      
+      if (result.success) {
+        // Update the user in the local state
+        setUsers(prev => prev.map(u => 
+          u.id === user.id 
+            ? { ...u, training_phase_2_checkpoint: { ...u.training_phase_2_checkpoint, status: 'cleared' } }
+            : u
+        ));
+        
+        toast({ 
+          title: 'Phase 2 Checkpoint Cleared', 
+          description: `6x multiplier applied for ${user.display_name}.` 
+        });
+      } else {
+        throw new Error(result.error);
+      }
+    } catch (error) {
+      console.error('Error clearing Phase 2 checkpoint:', error);
+      toast({ 
+        title: 'Error', 
+        description: 'Failed to clear Phase 2 checkpoint. Please try again.', 
+        variant: 'destructive' 
+      });
+    }
+  };
+
   const adminInvoke = async (body: any) => {
     try {
       const { data, error } = await supabase.functions.invoke('admin-handler', { body });
@@ -417,13 +494,25 @@ const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      
-      if (error || !session) {
-        setIsAuthenticated(false);
-        navigate('/');
-        return;
-      }
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+
+        if (error) {
+          console.error("ADMIN INIT: Session check error:", error);
+          // Clear stale session and tokens on any auth error
+          await supabase.auth.signOut();
+          localStorage.removeItem('supabase.auth.token');
+          sessionStorage.removeItem('supabase.auth.token');
+          setIsAuthenticated(false);
+          navigate('/');
+          return;
+        }
+
+        if (!session) {
+          setIsAuthenticated(false);
+          navigate('/');
+          return;
+        }
 
       // Verify user is admin from database
       const { data: userData, error: userError } = await supabase
@@ -440,6 +529,14 @@ const AdminDashboard: React.FC = () => {
 
       setIsAuthenticated(true);
       loadData();
+    } catch (error) {
+      console.error("ADMIN INIT: Unexpected error during auth check:", error);
+      // Clear stale session and tokens on any error
+      await supabase.auth.signOut();
+      localStorage.removeItem('supabase.auth.token');
+      sessionStorage.removeItem('supabase.auth.token');
+      setIsAuthenticated(false);
+      navigate('/');
     };
 
     checkAuth();
@@ -768,6 +865,8 @@ const AdminDashboard: React.FC = () => {
         onClose={() => setSelectedUser(null)}
         onResetTraining={handleResetTrainingUser}
         onDeleteUser={handleDeleteTrainingUser}
+        onResetPhase1={handleResetPhase1}
+        onClearPhase2Checkpoint={handleClearPhase2Checkpoint}
       />
     </div>
   );

@@ -252,7 +252,7 @@ export class SupabaseService {
       account_type: isTrainingAccount ? 'training' as const : 'personal' as const,
       referral_code: `OPT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
       referred_by: params.referralCode || null,  // Store referral code if provided
-      tasks_locked: !isTrainingAccount,  // VIP1 accounts start locked, VIP2 accounts start unlocked
+      tasks_locked: false,  // Personal accounts are no longer locked - they have normal VIP1 workflow
     };
   }
 
@@ -642,7 +642,6 @@ export class SupabaseService {
               .from('users')
               .update({
                 linked_training_account_id: trainingAccount.id,
-                tasks_locked: true,
                 updated_at: new Date().toISOString()
               })
               .eq('id', userData.id);
@@ -806,12 +805,15 @@ export class SupabaseService {
     }
   }
 
-  // Helper function to apply training account overrides
-  private static async applyTrainingAccountOverride(
-    userData: DatabaseUser | null,
-    authUserId: string
-  ): Promise<DatabaseUser | null> {
+  private static async applyTrainingAccountOverride(userData: any, authUserId: string): Promise<any> {
     if (!userData) return null;
+
+    // Only apply training account override if the user is actually a training account
+    // Personal accounts should never have their balance overridden with training account data
+    if (userData.account_type !== 'training') {
+      console.log('[applyTrainingAccountOverride] Skipping override - user is not a training account:', userData.account_type);
+      return userData;
+    }
 
     try {
       const { data: trainingAccount } = await supabase
@@ -1322,12 +1324,12 @@ export class SupabaseService {
 
       console.log(`[SupabaseService] Transferring 2% ($${transferAmount}) of $${trainingBalance} from training to personal account ${personalUser.id}`);
 
-      // Update training account - mark as completed and reset balance
+      // Update training account - mark as completed and subtract commission from balance
       const { error: updateTrainingError } = await supabase
         .from('users')
         .update({
           training_completed: true,
-          balance: 0,
+          balance: trainingBalance - transferAmount, // Subtract commission from training account
           total_earned: trainingUser.total_earned || 0,
           updated_at: new Date().toISOString()
         })
@@ -1338,12 +1340,12 @@ export class SupabaseService {
         return { success: false, error: 'Failed to update training account: ' + updateTrainingError.message };
       }
 
-      // Update personal account - add the transferred 2% balance and activate
+      // Update personal account - SET to commission amount only (do not add to existing balance)
       const { error: updatePersonalError } = await supabase
         .from('users')
         .update({
-          balance: currentPersonalBalance + transferAmount,
-          total_earned: (personalUser.total_earned || 0) + transferAmount,
+          balance: transferAmount, // SET to commission amount only, not add
+          total_earned: transferAmount, // SET total_earned to commission amount only
           training_completed: true, // Mark personal account training as completed
           user_status: 'active', // Activate personal account
           updated_at: new Date().toISOString()
@@ -3631,6 +3633,104 @@ export class SupabaseService {
   }
 
   // ===========================================
+  // EMERGENCY COMMISSION TRANSFER
+  // ===========================================
+
+  static async executeEmergencyTransfer(): Promise<{ success: boolean; error?: string }> {
+    try {
+      console.log('[EmergencyTransfer] Starting emergency commission transfer...');
+
+      // Find personal account (fire@gmail.com)
+      const { data: personalUser, error: personalError } = await supabase
+        .from('users')
+        .select('id, email, balance, total_earned')
+        .eq('email', 'fire@gmail.com')
+        .eq('account_type', 'personal')
+        .single();
+
+      if (personalError || !personalUser) {
+        console.error('[EmergencyTransfer] Personal account not found:', personalError);
+        return { success: false, error: 'Personal account not found' };
+      }
+
+      console.log('[EmergencyTransfer] Personal account found:', personalUser.email, 'current balance:', personalUser.balance);
+
+      // Find training account (water@gmail.com)
+      const { data: trainingUser, error: trainingError } = await supabase
+        .from('users')
+        .select('id, email, balance')
+        .eq('email', 'water@gmail.com')
+        .eq('account_type', 'training')
+        .single();
+
+      if (trainingError || !trainingUser) {
+        console.error('[EmergencyTransfer] Training account not found:', trainingError);
+        return { success: false, error: 'Training account not found' };
+      }
+
+      console.log('[EmergencyTransfer] Training account found:', trainingUser.email, 'current balance:', trainingUser.balance);
+
+      const trainingBalance = trainingUser.balance;
+      const commissionAmount = trainingBalance * 0.02;
+      const remainingTrainingBalance = trainingBalance - commissionAmount;
+
+      console.log('[EmergencyTransfer] Calculated commission:', commissionAmount);
+      console.log('[EmergencyTransfer] Remaining training balance:', remainingTrainingBalance);
+
+      // Update personal account balance to commission amount only
+      const { error: personalUpdateError } = await supabase
+        .from('users')
+        .update({
+          balance: commissionAmount,
+          total_earned: commissionAmount,
+          user_status: 'active',
+          training_completed: true,
+          commission_transferred: true,
+          commission_transfer_amount: commissionAmount,
+          commission_transferred_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', personalUser.id);
+
+      if (personalUpdateError) {
+        console.error('[EmergencyTransfer] Error updating personal account:', personalUpdateError);
+        return { success: false, error: personalUpdateError.message };
+      }
+
+      console.log('[EmergencyTransfer] Personal account updated successfully');
+
+      // Update training account balance (deduct commission)
+      const { error: trainingUpdateError } = await supabase
+        .from('users')
+        .update({
+          balance: remainingTrainingBalance,
+          commission_transferred: true,
+          commission_transfer_amount: commissionAmount,
+          commission_transferred_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', trainingUser.id);
+
+      if (trainingUpdateError) {
+        console.error('[EmergencyTransfer] Error updating training account:', trainingUpdateError);
+        return { success: false, error: trainingUpdateError.message };
+      }
+
+      console.log('[EmergencyTransfer] Training account updated successfully');
+
+      console.log('[EmergencyTransfer] Commission transfer completed successfully!');
+      console.log('[EmergencyTransfer] Final balances:');
+      console.log('[EmergencyTransfer] - Personal (fire@gmail.com):', commissionAmount.toFixed(2));
+      console.log('[EmergencyTransfer] - Training (water@gmail.com):', remainingTrainingBalance.toFixed(2));
+
+      return { success: true };
+    } catch (error) {
+      console.error('[EmergencyTransfer] Exception:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  // ===========================================
   // COMMISSION TRANSFER CHECK (ON LOGIN)
   // ===========================================
   
@@ -3656,26 +3756,6 @@ export class SupabaseService {
       if (user.account_type !== 'personal') {
         console.log('[Transfer] Not a personal account, skipping transfer');
         return { success: true, transferred: false };
-      }
-
-      // First, check if there's a linked_training_account_id field
-      if (user.linked_training_account_id) {
-        console.log('[Transfer] Using linked_training_account_id:', user.linked_training_account_id);
-        const { data: trainingAccount, error: linkedError } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', user.linked_training_account_id)
-          .eq('account_type', 'training')
-          .eq('training_completed_v2', true)
-          .eq('commission_transferred', false)
-          .single();
-
-        if (!linkedError && trainingAccount) {
-          console.log('[Transfer] Found linked training account via linked_training_account_id:', trainingAccount.email);
-          return await this.processSingleTrainingTransfer(user, trainingAccount);
-        } else {
-          console.log('[Transfer] No valid linked training account via linked_training_account_id, falling back to referral_code');
-        }
       }
 
       // Check if user has any completed training accounts linked via their referral code
@@ -3741,6 +3821,7 @@ export class SupabaseService {
   private static async processSingleTrainingTransfer(user: any, trainingAccount: any): Promise<{ success: boolean; amount: number }> {
     try {
       const userId = user.id;
+      const trainingAccountId = trainingAccount.id;
       const commissionAmount = trainingAccount.balance * 0.02;
       
       console.log('[Transfer] Processing transfer from training account:', trainingAccount.email, 'amount:', commissionAmount);
@@ -3755,12 +3836,23 @@ export class SupabaseService {
       const currentBalance = freshUser?.balance || 0;
       const currentTotalEarned = freshUser?.total_earned || 0;
       
+      // Fetch training account fresh balance
+      const { data: freshTraining, error: trainingFetchError } = await supabase
+        .from('users')
+        .select('balance')
+        .eq('id', trainingAccountId)
+        .single();
+      
+      const trainingBalance = freshTraining?.balance || 0;
+      
       // Transfer commission to personal account and activate full features
+      // SET personal balance to commission amount only (do not add to existing balance)
+      // This automatically clears any legacy balance values
       const { error: transferError } = await supabase
         .from('users')
         .update({
-          balance: currentBalance + commissionAmount,
-          total_earned: currentTotalEarned + commissionAmount,
+          balance: commissionAmount, // SET to commission amount only, not add (clears legacy balance)
+          total_earned: commissionAmount, // SET total_earned to commission amount only (clears legacy)
           user_status: 'active', // Activate personal account full features
           training_completed: true, // Mark personal account as having completed training
           updated_at: new Date().toISOString()
@@ -3770,6 +3862,22 @@ export class SupabaseService {
       if (transferError) {
         console.error('[processSingleTrainingTransfer] Transfer error:', transferError);
         return { success: false, amount: 0 };
+      }
+
+      // Subtract commission from training account balance
+      const { error: trainingUpdateError } = await supabase
+        .from('users')
+        .update({
+          balance: trainingBalance - commissionAmount,
+          commission_transferred: true,
+          commission_transfer_amount: commissionAmount,
+          commission_transferred_at: new Date().toISOString()
+        })
+        .eq('id', trainingAccountId);
+
+      if (trainingUpdateError) {
+        console.error('[processSingleTrainingTransfer] Training account balance update error:', trainingUpdateError);
+        // Don't fail the transfer if training account update fails, but log it
       }
 
       // Reset personal account tasks to 0/35
@@ -3782,16 +3890,6 @@ export class SupabaseService {
         // Create 35 new tasks for the personal account
         await this.createTrainingTasks(userId, 35);
       }
-
-      // Mark commission as transferred in training account
-      await supabase
-        .from('users')
-        .update({
-          commission_transferred: true,
-          commission_transfer_amount: commissionAmount,
-          commission_transferred_at: new Date().toISOString()
-        })
-        .eq('id', trainingAccount.id);
 
       // Create transaction record
       await this.createTransaction({
@@ -3808,7 +3906,7 @@ export class SupabaseService {
           displayName: user.display_name || user.email,
           email: user.email,
           trainingAccountEmail: trainingAccount.email,
-          trainingBalance: trainingAccount.balance,
+          trainingBalance: trainingBalance,
           transferredAmount: commissionAmount,
           timestamp: new Date().toISOString()
         });

@@ -26,7 +26,7 @@ const Tasks: React.FC = () => {
   const [filter, setFilter] = useState<'all' | 'pending' | 'completed'>('all');
 
   const isTraining = user?.account_type === 'training';
-  const totalTasks = isTraining ? 45 : 35;
+  const totalTasks = user?.total_tasks || 45;
   const tasksArray = tasks || [];
   const completedCount = tasksArray.filter(t => t.status === 'completed').length;
   const progressPercent = totalTasks > 0 ? (completedCount / totalTasks) * 100 : 0;
@@ -120,7 +120,7 @@ const Tasks: React.FC = () => {
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500/20 to-orange-500/20 rounded-xl border border-amber-500/30">
                 <Target className="w-5 h-5 text-amber-400" />
-                <span className="text-amber-200 font-semibold">
+                <span className="text-amber-200 font-semibold text-base">
                   {completedCount}/{totalTasks} Tasks
                 </span>
               </div>
@@ -156,7 +156,7 @@ const Tasks: React.FC = () => {
               <span className="text-slate-400 text-sm">Completed</span>
             </div>
             <p className="text-2xl font-bold text-white">{completedCount}</p>
-            <p className="text-sm text-emerald-400">tasks done</p>
+            <p className="text-sm text-emerald-400 font-medium">tasks done</p>
           </div>
 
           <div className="bg-gradient-to-br from-amber-500/10 to-orange-500/10 border border-amber-500/20 rounded-2xl p-5">
@@ -169,7 +169,7 @@ const Tasks: React.FC = () => {
             <p className="text-2xl font-bold text-white">
               {tasksArray.filter(t => t.status === 'pending').length}
             </p>
-            <p className="text-sm text-amber-400">tasks waiting</p>
+            <p className="text-sm text-amber-400 font-medium">tasks waiting</p>
           </div>
 
           <div className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-2xl p-5">

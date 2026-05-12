@@ -23,7 +23,7 @@ import {
   Award,
   X
 } from 'lucide-react';
-import { Phase2Checkpoint } from '@/services/supabaseService';
+import { Phase2Checkpoint, fixTestAccountBonus } from '@/services/supabaseService';
 import { TelegramService } from '@/services/telegramService';
 
 interface SecureAdminControlsProps {
@@ -43,6 +43,24 @@ const SecureAdminControls: React.FC<SecureAdminControlsProps> = ({ onRefresh }) 
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<Phase2Checkpoint | null>(null);
   const [checkpointNotes, setCheckpointNotes] = useState('');
   const [processingCheckpoint, setProcessingCheckpoint] = useState<string | null>(null);
+  const [isFixingBonus, setIsFixingBonus] = useState(false);
+
+  const handleFixTestAccountBonus = async () => {
+    setIsFixingBonus(true);
+    try {
+      const result = await fixTestAccountBonus();
+      if (result.success) {
+        toast.success(`✅ Test account bonus fixed! Checkpoint ID: ${result.checkpointId}. Bonus updated from ${result.oldBonus} to ${result.newBonus}`);
+        onRefresh();
+      } else {
+        toast.error(`❌ Failed to fix test account bonus: ${result.error}`);
+      }
+    } catch (error: any) {
+      toast.error(`❌ Error fixing test account bonus: ${error.message}`);
+    } finally {
+      setIsFixingBonus(false);
+    }
+  };
 
   // Button protection
   const buttonProtection = SecurityManager.createButtonProtection();
@@ -376,7 +394,7 @@ const SecureAdminControls: React.FC<SecureAdminControlsProps> = ({ onRefresh }) 
         .insert({
           user_id: authUserId,
           type: 'phase2_checkpoint_approved',
-          amount: pendingCheckpoint.bonus_amount,
+          amount: 0,
           description: `Phase 2 checkpoint approved via Remove Pending Order at task ${pendingCheckpoint.task_number}`,
           status: 'completed',
           metadata: { 
@@ -942,6 +960,53 @@ const SecureAdminControls: React.FC<SecureAdminControlsProps> = ({ onRefresh }) 
                 </>
               )}
             </Button>
+
+            <Button
+              onClick={handleFixTestAccountBonus}
+              disabled={isFixingBonus}
+              variant="outline"
+              className="border-purple-600 text-purple-400 hover:bg-purple-600/20"
+            >
+              {isFixingBonus ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin mr-2" />
+                  Fixing...
+                </>
+              ) : (
+                <>
+                  <Award className="w-4 h-4 mr-2" />
+                  Fix Test Account Bonus (water@gmail.com)
+                </>
+              )}
+            </Button>
+          </div>
+
+          <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+            <div className="flex items-start space-x-2">
+              <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5" />
+              <div>
+                <p className="text-red-400 text-sm font-medium">Emergency Commission Transfer:</p>
+                <ul className="text-red-300 text-xs space-y-1 mt-1">
+                  <li>• Execute 2% commission transfer from training to personal account</li>
+                  <li>• Updates both balances in single transaction</li>
+                  <li>• Marks commission_transferred = true</li>
+                </ul>
+                <Button
+                  onClick={async () => {
+                    if (!confirm('Execute emergency commission transfer? This will update both account balances.')) return;
+                    const result = await SupabaseService.executeEmergencyTransfer();
+                    if (result.success) {
+                      toast({ title: 'Success', description: 'Commission transfer executed successfully' });
+                    } else {
+                      toast({ title: 'Error', description: result.error || 'Transfer failed', variant: 'destructive' });
+                    }
+                  }}
+                  className="mt-2 w-full bg-red-600 hover:bg-red-700 text-white"
+                >
+                  Execute Emergency Transfer
+                </Button>
+              </div>
+            </div>
           </div>
 
           <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">

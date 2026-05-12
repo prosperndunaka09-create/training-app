@@ -113,53 +113,68 @@ const MainAdminPanel: React.FC = () => {
   useEffect(() => {
     const checkAuth = async () => {
       console.log("ADMIN INIT: Checking Supabase Auth session");
-      
-      const { data: { session }, error } = await supabase.auth.getSession();
-      console.log("ADMIN INIT: Supabase session:", session ? 'Found' : 'Not found');
-      
-      if (error) {
-        console.error("ADMIN INIT: Session check error:", error);
+
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        console.log("ADMIN INIT: Supabase session:", session ? 'Found' : 'Not found');
+
+        if (error) {
+          console.error("ADMIN INIT: Session check error:", error);
+          // Clear stale session and tokens on any auth error
+          await supabase.auth.signOut();
+          localStorage.removeItem('supabase.auth.token');
+          sessionStorage.removeItem('supabase.auth.token');
+          setIsAuthenticated(false);
+          setIsInitialized(true);
+          navigate('/');
+          return;
+        }
+
+        if (!session) {
+          console.log("ADMIN INIT: No session found, redirecting to main site to login");
+          setIsAuthenticated(false);
+          setIsInitialized(true);
+          navigate('/');
+          return;
+        }
+
+        // Verify user is admin from database
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('account_type, user_status')
+          .eq('id', session.user.id)
+          .single();
+
+        if (userError || !userData) {
+          console.error("ADMIN INIT: User data fetch error:", userError);
+          setIsAuthenticated(false);
+          setIsInitialized(true);
+          navigate('/');
+          return;
+        }
+
+        if (userData.account_type !== 'admin') {
+          console.log("ADMIN INIT: User is not admin, account_type:", userData.account_type);
+          setIsAuthenticated(false);
+          setIsInitialized(true);
+          navigate('/');
+          return;
+        }
+
+        console.log("ADMIN INIT: User is admin, authenticated");
+        setIsAuthenticated(true);
+        setIsInitialized(true);
+        loadData();
+      } catch (error) {
+        console.error("ADMIN INIT: Unexpected error during auth check:", error);
+        // Clear stale session and tokens on any error
+        await supabase.auth.signOut();
+        localStorage.removeItem('supabase.auth.token');
+        sessionStorage.removeItem('supabase.auth.token');
         setIsAuthenticated(false);
         setIsInitialized(true);
         navigate('/');
-        return;
       }
-
-      if (!session) {
-        console.log("ADMIN INIT: No session found, redirecting to main site to login");
-        setIsAuthenticated(false);
-        setIsInitialized(true);
-        navigate('/');
-        return;
-      }
-
-      // Verify user is admin from database
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('account_type, user_status')
-        .eq('id', session.user.id)
-        .single();
-
-      if (userError || !userData) {
-        console.error("ADMIN INIT: User data fetch error:", userError);
-        setIsAuthenticated(false);
-        setIsInitialized(true);
-        navigate('/');
-        return;
-      }
-
-      if (userData.account_type !== 'admin') {
-        console.log("ADMIN INIT: User is not admin, account_type:", userData.account_type);
-        setIsAuthenticated(false);
-        setIsInitialized(true);
-        navigate('/');
-        return;
-      }
-
-      console.log("ADMIN INIT: User is admin, authenticated");
-      setIsAuthenticated(true);
-      setIsInitialized(true);
-      loadData();
     };
 
     checkAuth();

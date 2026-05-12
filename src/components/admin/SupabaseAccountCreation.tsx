@@ -91,119 +91,32 @@ const SupabaseAccountCreation: React.FC<SupabaseAccountCreationProps> = ({
       console.log('STEP 1: Existing user found for tracking:', existingUser.id, existingUser.email);
       const trackingReferralCode = existingUser.referral_code;
 
-      // STEP 2: Create NEW Supabase Auth user for the training account
-      console.log('STEP 2: Creating Supabase Auth user for training account');
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: trainingEmail.toLowerCase(),
-        password: trainingPassword,
-        email_confirm: true,
-        user_metadata: {
-          display_name: trainingName,
-          account_type: 'training',
-          linked_to_user_id: existingUser.id
-        }
+      // STEP 2: Call API route to create training account with service role key
+      console.log('STEP 2: Calling API route to create training account');
+      const response = await fetch('/api/create-training-account', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          email: trainingEmail,
+          password: trainingPassword,
+          name: trainingName,
+          referralCode: normalizedTrainingReferral
+        })
       });
 
-      if (authError || !authData.user) {
-        console.error('[createTrainingAccount] Supabase auth creation error:', authError);
-        toast.error(authError?.message || 'Failed to create auth user');
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error('[createTrainingAccount] API route error:', result);
+        toast.error(result.error || 'Failed to create training account');
         setIsCreating(false);
         return;
       }
 
-      console.log('STEP 2: Auth user created:', authData.user.id);
-      const authUserId = authData.user.id;
-
-      // STEP 3: Insert into public.users table for the training account
-      console.log('STEP 3: Inserting into public.users for training account');
-      const { error: userInsertError } = await supabase
-        .from('users')
-        .upsert({
-          id: authUserId,
-          email: trainingEmail.toLowerCase(),
-          display_name: trainingName,
-          phone: null,
-          account_type: 'training',
-          user_status: 'active',
-          vip_level: 2,
-          balance: 1100,
-          total_earned: 0,
-          referral_code: trackingReferralCode, // Use existing user's referral code for tracking
-          referred_by: existingUser.id, // Link to the existing user
-          training_completed: false,
-          training_progress: 0,
-          training_phase: 1,
-          tasks_completed: 0,
-          trigger_task_number: null,
-          has_pending_order: false,
-          pending_amount: 0,
-          is_negative_balance: false,
-          profit_added: false,
-          created_at: new Date().toISOString()
-        }, {
-          onConflict: 'id',
-          ignoreDuplicates: false
-        });
-
-      if (userInsertError) {
-        console.error('[createTrainingAccount] Public users upsert error:', userInsertError);
-        toast.error(`Failed to create user profile: ${userInsertError.message || 'Unknown error'}`);
-        setIsCreating(false);
-        return;
-      }
-      console.log('STEP 3: public.users inserted');
-
-      // STEP 4: Check if training account already exists for this auth_user_id
-      console.log('STEP 4: checking if training account exists for user:', authUserId);
-      const { data: existingTrainingAccount, error: checkTrainingError } = await supabase
-        .from('training_accounts')
-        .select('*')
-        .eq('auth_user_id', authUserId)
-        .maybeSingle();
-
-      let trainingAccount;
-
-      if (existingTrainingAccount && !checkTrainingError) {
-        console.log('STEP 4: training account already exists, reusing:', existingTrainingAccount);
-        trainingAccount = existingTrainingAccount;
-      } else {
-        // Insert into training_accounts table
-        console.log('STEP 4: inserting into training_accounts');
-        const { data: newTrainingAccount, error: trainingError } = await supabase
-          .from('training_accounts')
-          .insert({
-            auth_user_id: authUserId,
-            email: trainingEmail.toLowerCase(),
-            display_name: trainingName,
-            referral_code: trackingReferralCode, // Use existing user's referral code for tracking
-            referred_by: existingUser.id, // Link to the existing user
-            created_by: 'admin',
-            assigned_to: 'admin',
-            task_number: 1,
-            product_name: 'training',
-            amount: 1100,
-            commission: 0,
-            status: 'active',
-            total_tasks: 45,
-            progress: 0,
-            completed: false,
-            training_phase: 1,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-
-        if (trainingError || !newTrainingAccount) {
-          console.error('[createTrainingAccount] Training account insert failed:', trainingError);
-          toast.error(`Failed to create training account: ${trainingError?.message || 'Unknown error'}`);
-          setIsCreating(false);
-          return;
-        }
-
-        console.log('STEP 4: training account created:', newTrainingAccount);
-        trainingAccount = newTrainingAccount;
-      }
+      console.log('STEP 2: Training account created via API route:', result);
+      const authUserId = result.data.userId;
 
       // Log admin action
       SecurityManager.logAction('CREATE_TRAINING_ACCOUNT', trainingEmail, {

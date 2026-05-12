@@ -700,12 +700,12 @@ const AdminCustomerService: React.FC = () => {
   }, [conversations]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 overflow-hidden">
       <Toaster position="top-right" />
-      
-      <div className="flex h-screen flex-col md:flex-row">
-        {/* Sidebar - Conversation List */}
-        <div className={`${selectedConversation ? 'hidden md:flex' : 'flex'} w-full md:w-80 bg-slate-900/50 border-r border-white/10 flex-col`}>
+
+      <div className="flex h-screen flex-row overflow-hidden">
+        {/* Sidebar - Conversation List - Fixed width 350px */}
+        <div className="w-[350px] shrink-0 bg-slate-900/50 border-r border-white/10 flex-col hidden md:flex">
           {/* Header */}
           <div className="p-4 border-b border-white/10">
             <div>
@@ -800,8 +800,8 @@ const AdminCustomerService: React.FC = () => {
           </div>
         </div>
 
-        {/* Main Chat Area */}
-        <div className={`${selectedConversation ? 'flex' : 'hidden md:flex'} flex-1 flex-col bg-slate-900/30`}>
+        {/* Main Chat Area - Always visible, fills remaining width */}
+        <div className="flex-1 min-w-0 flex flex-col bg-slate-900/30">
           {selectedConversation ? (
             <>
               {/* Chat Header */}
@@ -809,7 +809,7 @@ const AdminCustomerService: React.FC = () => {
                 <div className="flex items-center gap-2 md:gap-3">
                   <button
                     onClick={() => setSelectedConversation(null)}
-                    className="p-2 hover:bg-white/10 rounded-lg"
+                    className="p-2 hover:bg-white/10 rounded-lg md:hidden"
                   >
                     <ChevronLeft className="w-5 h-5 text-white" />
                   </button>
@@ -829,7 +829,7 @@ const AdminCustomerService: React.FC = () => {
                     {getStatusIcon(selectedConversation.status)}
                     <span className="capitalize">{selectedConversation.status}</span>
                   </div>
-                  
+
                   <button
                     onClick={() => fetchMessages(selectedConversation.id)}
                     className="p-2 hover:bg-white/10 rounded-lg transition-colors flex-shrink-0"
@@ -838,7 +838,7 @@ const AdminCustomerService: React.FC = () => {
                   >
                     <RefreshCw className={`w-4 h-4 text-slate-400 ${isLoading ? 'animate-spin' : ''}`} />
                   </button>
-                  
+
                   {/* Status Dropdown */}
                   <div className="relative">
                     <select
@@ -853,7 +853,7 @@ const AdminCustomerService: React.FC = () => {
                       <option value="closed">Closed</option>
                     </select>
                   </div>
-                  
+
                   <button
                     onClick={() => deleteConversation(selectedConversation.id)}
                     className="flex items-center gap-1 px-2 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors flex-shrink-0"
@@ -928,7 +928,7 @@ const AdminCustomerService: React.FC = () => {
                                 )}
                               </div>
                             )}
-                            <p className="text-sm md:text-base whitespace-pre-wrap">{msg.content || "No content"}</p>
+                            <p className="text-sm md:text-base whitespace-pre-wrap">{msg.content || (msg.attachment_url ? '' : "No content")}</p>
                           </div>
                           <div className={`flex items-center gap-1 mt-1 text-xs text-slate-500 ${isAdmin ? 'justify-end' : 'justify-start'}`}>
                             <span>{isAdmin ? 'You' : 'Customer'}</span>
@@ -1047,11 +1047,10 @@ const AdminCustomerService: React.FC = () => {
               </div>
             </>
           ) : (
-            <div className="flex items-center justify-center h-full text-slate-400">
-              <div className="text-center">
-                <MessageCircle className="w-16 h-16 mx-auto mb-4 opacity-30" />
-                <p>Select a conversation to start messaging</p>
-              </div>
+            <div className="flex flex-col items-center justify-center h-full text-slate-400 p-8">
+              <MessageCircle className="w-20 h-20 mx-auto mb-4 opacity-30" />
+              <p className="text-lg font-medium">Select a conversation to start messaging</p>
+              <p className="text-sm mt-2 opacity-60">Choose from the conversation list on the left</p>
             </div>
           )}
         </div>

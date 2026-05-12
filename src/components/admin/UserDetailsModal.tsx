@@ -1,6 +1,6 @@
 import React from 'react';
 // v2.0 - Added reset and delete functionality
-import { X, RefreshCw, Trash2, Mail, Phone, Hash, GraduationCap, Crown, Wallet, TrendingUp, Calendar } from 'lucide-react';
+import { X, RefreshCw, Trash2, Mail, Phone, Hash, GraduationCap, Crown, Wallet, TrendingUp, Calendar, Unlock, Trophy } from 'lucide-react';
 import { AdminUser } from './AdminUsersTable';
 
 interface UserDetailsModalProps {
@@ -9,6 +9,8 @@ interface UserDetailsModalProps {
   onClose: () => void;
   onResetTraining?: (user: AdminUser) => void;
   onDeleteUser?: (user: AdminUser) => void;
+  onResetPhase1?: (user: AdminUser) => void;
+  onClearPhase2Checkpoint?: (user: AdminUser) => void;
 }
 
 const UserDetailsModal: React.FC<UserDetailsModalProps> = ({ 
@@ -16,7 +18,9 @@ const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   isOpen, 
   onClose, 
   onResetTraining,
-  onDeleteUser 
+  onDeleteUser,
+  onResetPhase1,
+  onClearPhase2Checkpoint
 }) => {
   // Early return with safety check
   if (!isOpen || !user) return null;
@@ -36,6 +40,9 @@ const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
     training_progress: user.training_progress || 0,
     task_number: user.task_number ?? 1,
     tasks_completed: user.tasks_completed || 0,
+    training_phase: user.training_phase || 1,
+    training_phase_1_locked: user.training_phase_1_locked || false,
+    training_phase_2_checkpoint: user.training_phase_2_checkpoint || null,
     created_at: user.created_at || new Date().toISOString(),
     id: user.id || ''
   };
@@ -50,6 +57,20 @@ const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   const handleDelete = () => {
     if (onDeleteUser && safeUser.account_type === 'training') {
       onDeleteUser(user);
+      onClose();
+    }
+  };
+
+  const handleResetPhase1 = () => {
+    if (onResetPhase1 && safeUser.account_type === 'training' && safeUser.vip_level === 2) {
+      onResetPhase1(user);
+      onClose();
+    }
+  };
+
+  const handleClearPhase2Checkpoint = () => {
+    if (onClearPhase2Checkpoint && safeUser.account_type === 'training' && safeUser.vip_level === 2) {
+      onClearPhase2Checkpoint(user);
       onClose();
     }
   };
@@ -164,7 +185,7 @@ const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                   <RefreshCw size={14} className="text-blue-400" />
                   <span className="text-sm text-gray-300">
                     {safeUser.account_type === 'training'
-                      ? `${safeUser.task_number ?? 1} of 45 tasks`
+                      ? `${safeUser.task_number ?? 1} of 45 tasks (Phase ${safeUser.training_phase || 1})`
                       : `${safeUser.tasks_completed || 0} of 35 tasks`
                     }
                   </span>
@@ -187,6 +208,22 @@ const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
                   }}
                 />
               </div>
+              {/* Phase 1 Lock Status */}
+              {safeUser.account_type === 'training' && safeUser.vip_level === 2 && safeUser.training_phase_1_locked && (
+                <div className="mt-3 flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                  <Lock size={14} className="text-amber-400" />
+                  <span className="text-xs text-amber-400 font-medium">Phase 1 Locked (45/45 completed)</span>
+                </div>
+              )}
+              {/* Phase 2 Checkpoint Status */}
+              {safeUser.account_type === 'training' && safeUser.vip_level === 2 && safeUser.training_phase_2_checkpoint && (
+                <div className="mt-3 flex items-center gap-2 px-3 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                  <Trophy size={14} className="text-emerald-400" />
+                  <span className="text-xs text-emerald-400 font-medium">
+                    Phase 2 Checkpoint: {safeUser.training_phase_2_checkpoint.status || 'pending'}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -194,24 +231,51 @@ const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
           {safeUser.account_type === 'training' && (
             <div className="space-y-3">
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</h3>
-              <div className="flex gap-3">
-                {onResetTraining && (
-                  <button
-                    onClick={handleReset}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 rounded-lg transition-all font-medium"
-                  >
-                    <RefreshCw size={18} />
-                    Reset Training Account
-                  </button>
+              <div className="space-y-2">
+                {safeUser.vip_level === 2 && (
+                  <>
+                    {/* Phase 1 Reset Button */}
+                    {onResetPhase1 && safeUser.training_phase_1_locked && (
+                      <button
+                        onClick={handleResetPhase1}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg transition-all font-medium"
+                      >
+                        <Unlock size={18} />
+                        Unlock Phase 1 & Start Phase 2
+                      </button>
+                    )}
+                    {/* Phase 2 Checkpoint Clear Button */}
+                    {onClearPhase2Checkpoint && safeUser.training_phase_2_checkpoint?.status === 'pending_review' && (
+                      <button
+                        onClick={handleClearPhase2Checkpoint}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 rounded-lg transition-all font-medium"
+                      >
+                        <Trophy size={18} />
+                        Clear Phase 2 Checkpoint (6x Multiplier)
+                      </button>
+                    )}
+                  </>
                 )}
-                {onDeleteUser && (
-                  <button
-                    onClick={handleDelete}
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-all font-medium"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                )}
+                {/* Standard Reset Button */}
+                <div className="flex gap-3">
+                  {onResetTraining && (
+                    <button
+                      onClick={handleReset}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 rounded-lg transition-all font-medium"
+                    >
+                      <RefreshCw size={18} />
+                      Reset Training Account
+                    </button>
+                  )}
+                  {onDeleteUser && (
+                    <button
+                      onClick={handleDelete}
+                      className="flex items-center justify-center gap-2 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-all font-medium"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-gray-500">
                 Reset will clear all progress and set tasks back to 0/45. The user will see the change immediately.

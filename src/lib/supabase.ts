@@ -30,10 +30,14 @@ export type Database = {
         Row: {
           id: string
           email: string
+          display_name: string
+          phone: string | null
           password_hash: string
           balance: number
+          total_earned: number
           vip_level: number
           account_type: string
+          user_status: string
           training_completed: boolean
           training_progress: number
           training_phase: number
@@ -44,6 +48,20 @@ export type Database = {
           is_negative_balance: boolean
           profit_added: boolean
           pending_product: any
+          current_task_set: number
+          set_1_completed_at: string | null
+          set_2_completed_at: string | null
+          referral_code: string | null
+          referred_by: string | null
+          training_phase_2_checkpoint: any
+          training_completed_v2: boolean
+          commission_transferred: boolean
+          commission_transfer_amount: number
+          commission_transferred_at: string | null
+          training_phase_1_locked: boolean
+          training_phase_1_locked_at: string | null
+          tasks_locked: boolean
+          linked_training_account_id: string | null
           created_at: string
           updated_at: string
         }
@@ -63,7 +81,7 @@ export type Database = {
         Row: {
           id: string
           user_id: string
-          type: 'deposit' | 'earning' | 'withdrawal' | 'task_reward'
+          type: 'deposit' | 'earning' | 'withdrawal' | 'task_reward' | 'commission_transfer'
           amount: number
           description: string
           status: 'pending' | 'completed' | 'failed'

@@ -556,7 +556,7 @@ export const ProductCatalogService = {
         }
       )
       .subscribe((status) => {
-        console.log('[ProductCatalog] Training products subscription status:', status);
+        // Subscription status logged only on error
       });
   },
 
@@ -579,7 +579,7 @@ export const ProductCatalogService = {
         }
       )
       .subscribe((status) => {
-        console.log('[ProductCatalog] Personal products subscription status:', status);
+        // Subscription status logged only on error
       });
   },
 

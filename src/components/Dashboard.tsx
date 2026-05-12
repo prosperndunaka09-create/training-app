@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
+import { useCSNotification } from '@/contexts/CSNotificationContext';
 import { DollarSign, Zap, Award, Wallet, ArrowDownToLine, TrendingUp, CheckCircle, Clock, Lock, ArrowRight, BarChart3, Target, GraduationCap, Star, MessageCircle, AlertTriangle, Home, Play, FileText, Headphones } from 'lucide-react';
 import { DailyBonusCompact } from './DailyBonus';
 import CombinationOrderModal from './CombinationOrderModal';
@@ -9,6 +10,7 @@ import CSSelectionModal from './CSSelectionModal';
 const Dashboard: React.FC = () => {
   const context = useAppContext();
   const { user, tasks, wallets, transactions, walletState, refreshTasks, refreshWallets, refreshTransactions, setActiveTab } = context;
+  const { unreadCount } = useCSNotification();
   
   // Safety wrapper for setActiveTab
   const safeSetActiveTab = (tab: string) => {
@@ -19,9 +21,9 @@ const Dashboard: React.FC = () => {
     }
   };
   
-  const [isTraining, setIsTraining] = useState(false);
-  const [isPersonal, setIsPersonal] = useState(false);
-  const [trainingComplete, setTrainingComplete] = useState(false);
+  const [isTraining, setIsTraining] = useState(user?.account_type === 'training');
+  const [isPersonal, setIsPersonal] = useState(user?.account_type === 'personal');
+  const [trainingComplete, setTrainingComplete] = useState(user?.training_completed || false);
   const [showCombinationModal, setShowCombinationModal] = useState(false);
   const [showCustomerService, setShowCustomerService] = useState(false);
   const [showCSSelection, setShowCSSelection] = useState(false);
@@ -41,21 +43,36 @@ const Dashboard: React.FC = () => {
     if (!user || dataLoaded) return;
     
     let cancelled = false;
+    let timeoutId: NodeJS.Timeout;
+    
     const loadData = async () => {
       try {
-        await Promise.allSettled([
+        // Add timeout protection (15 seconds)
+        const dataPromise = Promise.allSettled([
           refreshTasks(),
           refreshWallets(),
           refreshTransactions()
         ]);
+        
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error('Dashboard data loading timeout')), 15000);
+        });
+        
+        await Promise.race([dataPromise, timeoutPromise]);
       } catch (err) {
         console.error('Error loading dashboard data:', err);
+        // Even on error, set dataLoaded to prevent infinite loading
       } finally {
+        if (timeoutId) clearTimeout(timeoutId);
         if (!cancelled) setDataLoaded(true);
       }
     };
+    
     loadData();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [user]); // only depend on user, not on unstable function refs
 
   useEffect(() => {
@@ -91,6 +108,9 @@ const Dashboard: React.FC = () => {
   const trainingTotalTasks = user?.total_tasks || 45;
   const trainingCompletedCount = isTraining ? Math.max(0, (user?.task_number || 1) - 1) : 0;
   
+  // Use trainingTotalTasks for training accounts, 35 for personal accounts
+  const totalTasks = isTraining ? trainingTotalTasks : 35;
+  
   // Use Supabase-derived count for training, tasks array for personal
   const completedCount = isTraining ? trainingCompletedCount : safeTasks.filter(t => t.status === 'completed').length;
   
@@ -99,7 +119,7 @@ const Dashboard: React.FC = () => {
   // Use user.total_earned from database as the single source of truth
   const totalReward = user?.total_earned || 0;
   
-  const progress = safeTasks.length > 0 ? (completedCount / (isTraining ? trainingTotalTasks : safeTasks.length)) * 100 : 0;
+  const progress = totalTasks > 0 ? (completedCount / totalTasks) * 100 : 0;
   const primaryWallet = safeWallets.find(w => w.is_primary);
   const displayRole =
     user?.account_type === 'admin'
@@ -107,7 +127,7 @@ const Dashboard: React.FC = () => {
       : user?.vip_level
         ? `VIP${user.vip_level} Member`
         : 'Member';
-  const allTasksComplete = isTraining ? completedCount === trainingTotalTasks : completedCount === safeTasks.length;
+  const allTasksComplete = isTraining ? completedCount === trainingTotalTasks : completedCount === totalTasks;
   const pendingWithdrawals = safeTransactions.filter(t => t.type === 'withdrawal' && t.status === 'pending');
 
   // Show loading state while data is being fetched
@@ -190,14 +210,16 @@ const Dashboard: React.FC = () => {
               </p>
             </div>
           </div>
-          <p className="text-gray-400 text-sm">
+          <p className="text-gray-400 text-sm font-medium">
             {isTraining
               ? trainingComplete
                 ? 'Training completed! You can now upgrade to a personal account.'
                 : `Complete ${trainingTotalTasks - completedCount} more tasks to finish training.`
               : allTasksComplete
                 ? 'All tasks complete! You can now withdraw your earnings.'
-                : `You have ${safeTasks.length - completedCount} tasks remaining in your VIP${user?.vip_level || 1} set.`}
+                : user?.tasks_locked
+                  ? 'Your account is locked until your linked training account completes the full training cycle.'
+                  : `You have ${totalTasks - completedCount} tasks remaining in your VIP${user?.vip_level || 1} set (${isTraining ? '45' : (user?.vip_level === 1 ? '35' : '45')} tasks total).`}
           </p>
         </div>
       </div>
@@ -361,15 +383,20 @@ const Dashboard: React.FC = () => {
         {isTraining && !trainingComplete && (
           <button
             onClick={() => window.open('https://t.me/EARNINGSLLCONLINECS1', '_blank')}
-            className="p-4 bg-white/[0.03] border border-white/[0.06] rounded-xl hover:bg-white/[0.05] transition-all group"
+            className="p-4 bg-white/[0.03] border border-white/[0.06] rounded-xl hover:bg-white/[0.05] transition-all group relative"
           >
             <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/15 flex items-center justify-center group-hover:bg-blue-500/20 transition-colors">
+              <div className={`w-10 h-10 rounded-xl bg-blue-500/15 flex items-center justify-center group-hover:bg-blue-500/20 transition-colors ${unreadCount > 0 ? 'animate-pulse' : ''}`}>
                 <MessageCircle size={20} className="text-blue-400" />
               </div>
               <span className="text-white font-semibold">Contact Support</span>
             </div>
             <p className="text-xs text-gray-500">Get help from customer service</p>
+            {unreadCount > 0 && (
+              <div className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 rounded-full flex items-center justify-center shadow-lg animate-bounce">
+                <span className="text-white text-xs font-bold">{unreadCount > 99 ? '99+' : unreadCount}</span>
+              </div>
+            )}
           </button>
         )}
 
@@ -400,7 +427,7 @@ const Dashboard: React.FC = () => {
               </div>
               <span className="text-white font-semibold">Upgrade to VIP1</span>
             </div>
-            <p className="text-xs text-gray-500">Unlock 0.5% task rewards</p>
+            <p className="text-sm text-gray-500 font-medium">Unlock 0.5% task rewards</p>
           </button>
         )}
 
@@ -415,7 +442,7 @@ const Dashboard: React.FC = () => {
               </div>
               <span className="text-white font-semibold">Upgrade to VIP2</span>
             </div>
-            <p className="text-xs text-gray-500">Unlock 1% task rewards</p>
+            <p className="text-sm text-gray-500 font-medium">Unlock 1% task rewards</p>
           </button>
         )}
 
@@ -438,20 +465,20 @@ const Dashboard: React.FC = () => {
           <button
             onClick={() => safeSetActiveTab('withdraw')}
             className={`p-4 bg-white/[0.03] border border-white/[0.06] rounded-xl hover:bg-white/[0.05] transition-all group ${
-              user?.has_pending_order || user?.is_negative_balance ? 'opacity-50 cursor-not-allowed' : ''
+              user?.has_pending_order || user?.is_negative_balance ? 'opacity-50 cursor-not-allowed' : 'opacity-50 cursor-not-allowed'
             }`}
-            disabled={user?.has_pending_order || user?.is_negative_balance}
+            disabled={true}
           >
             <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center group-hover:bg-emerald-500/20 transition-colors">
-                <ArrowDownToLine size={20} className="text-emerald-400" />
+              <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center group-hover:bg-amber-500/20 transition-colors">
+                <Lock size={20} className="text-amber-400" />
               </div>
               <span className="text-white font-semibold">
-                {user?.has_pending_order || user?.is_negative_balance ? 'Tasks Incomplete' : 'Withdraw Funds'}
+                Withdrawals Locked
               </span>
             </div>
-            <p className="text-xs text-gray-500">
-              {user?.has_pending_order || user?.is_negative_balance ? 'Clear pending orders first' : 'Withdraw your earnings'}
+            <p className="text-sm text-gray-500 font-medium">
+              Complete task cycles to unlock withdrawals
             </p>
           </button>
         )}

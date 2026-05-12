@@ -142,25 +142,14 @@ const Home: React.FC = () => {
           
           <button 
             onClick={() => {
-              if (user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed) {
-                alert('Task area locked. Complete linked training to unlock.');
-                return;
-              }
               safeSetActiveTab('tasks');
             }}
             className="flex flex-col items-center gap-1 relative -top-4"
-            disabled={user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed}
           >
-            <div className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg ${
-              user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed
-                ? 'bg-gray-600 shadow-gray-600/30 cursor-not-allowed'
-                : 'bg-gradient-to-r from-purple-500 to-pink-500 shadow-purple-500/30'
-            }`}>
-              <Play className={`w-8 h-8 ml-1 ${user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed ? 'text-gray-400' : 'text-white'}`} />
+            <div className="w-16 h-16 rounded-full flex items-center justify-center shadow-lg bg-gradient-to-r from-purple-500 to-pink-500 shadow-purple-500/30">
+              <Play className="w-8 h-8 ml-1 text-white" />
             </div>
-            <span className={`text-xs font-medium ${user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed ? 'text-gray-400' : 'text-white'}`}>
-              {user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed ? 'Locked' : 'Start'}
-            </span>
+            <span className="text-xs font-medium text-white">Start</span>
           </button>
           
           <button 

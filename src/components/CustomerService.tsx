@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
+import { useCSNotification } from '@/contexts/CSNotificationContext';
 import { X, Send, MessageCircle, ExternalLink, RefreshCw, Lock, Unlock, Clock, Paperclip, X as XIcon, FileText, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { toast } from '@/components/ui/use-toast';
@@ -28,6 +29,7 @@ interface Conversation {
 
 const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { user, isAuthenticated } = useAppContext();
+  const { incrementUnread, resetUnread } = useCSNotification();
   const [step, setStep] = useState<'form' | 'conversation'>('form');
   const [formData, setFormData] = useState({
     full_name: '',
@@ -60,6 +62,52 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
 
   // Subscriptions ref for cleanup
   const subscriptionsRef = useRef<any[]>([]);
+
+  // Notification sound function
+  const playNotificationSound = () => {
+    try {
+      const audio = new Audio('/notification.mp3');
+      audio.volume = 0.5;
+      audio.play().catch(err => console.log('Audio play failed:', err));
+    } catch (err) {
+      console.log('Notification sound error:', err);
+    }
+  };
+
+  // Browser notification function
+  const showBrowserNotification = (message: string) => {
+    if (Notification.permission === 'granted') {
+      new Notification('New Message from Support', {
+        body: message,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png'
+      });
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then(permission => {
+        if (permission === 'granted') {
+          new Notification('New Message from Support', {
+            body: message,
+            icon: '/icon-192.png',
+            badge: '/icon-192.png'
+          });
+        }
+      });
+    }
+  };
+
+  // Vibration function for mobile
+  const triggerVibration = () => {
+    if ('vibrate' in navigator) {
+      navigator.vibrate([200, 100, 200]);
+    }
+  };
+
+  // Combined notification function
+  const triggerNotifications = (message: string) => {
+    playNotificationSound();
+    showBrowserNotification(message);
+    triggerVibration();
+  };
 
   // File handling functions
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -138,11 +186,11 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
 
     setIsUploading(true);
 
-    // Add timeout guard (30 seconds)
+    // Add timeout guard (20 seconds)
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
-        reject(new Error('Upload timeout after 30 seconds'));
-      }, 30000);
+        reject(new Error('Upload timeout after 20 seconds'));
+      }, 20000);
     });
 
     try {
@@ -197,7 +245,7 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
       };
     } catch (error: any) {
       console.error('[CustomerService] Upload exception:', error);
-      const errorMessage = error.message === 'Upload timeout after 30 seconds'
+      const errorMessage = error.message === 'Upload timeout after 20 seconds'
         ? 'Upload timed out. Please try again with a smaller file or check your connection.'
         : 'Failed to upload attachment. Please try again.';
 
@@ -223,8 +271,10 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
     if (isOpen && isAuthenticated && user) {
       console.log('[CustomerService] Checking for existing conversations for user:', user.id);
       checkExistingConversation();
+      // Reset unread count when chat is opened
+      resetUnread();
     }
-  }, [isOpen, isAuthenticated, user]);
+  }, [isOpen, isAuthenticated, user, resetUnread]);
 
   // Cleanup all subscriptions on unmount
   useEffect(() => {
@@ -288,6 +338,8 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
           // Show notification for admin messages
           if (transformedMsg.is_admin) {
             setHasNewMessage(true);
+            incrementUnread();
+            triggerNotifications('Customer service has responded to your message.');
             toast({
               title: 'New reply from support',
               description: 'Customer service has responded to your message.',
@@ -455,86 +507,123 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
 
     console.log('[CustomerService] Creating new conversation for user:', user.id);
     setIsLoading(true);
+
+    let dbSaveSuccess = false;
+    let newConversation: any = null;
+    let savedMessage: any = null;
     
+    // Add timeout guard (15 seconds for new conversation)
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('Submission timeout after 15 seconds'));
+      }, 15000);
+    });
+
     try {
-      // Create conversation in Supabase
-      const { data: newConversation, error: convError } = await supabase
-        .from('conversations')
-        .insert({
-          user_id: user.id,
-          user_email: user.email,
-          status: 'open'
-        })
-        .select()
-        .single();
+      // Race between submission and timeout
+      const submissionPromise = (async () => {
+        // Create conversation in Supabase
+        const { data: convData, error: convError } = await supabase
+          .from('conversations')
+          .insert({
+            user_id: user.id,
+            user_email: user.email,
+            status: 'open'
+          })
+          .select()
+          .single();
 
-      if (convError || !newConversation) {
-        console.error('[CustomerService] Error creating conversation:', convError);
-        toast({
-          title: 'Error',
-          description: 'Failed to create conversation. Please try again.',
-          variant: 'destructive'
-        });
-        return;
-      }
+        if (convError || !convData) {
+          console.error('[CustomerService] Error creating conversation:', convError);
+          throw new Error(convError?.message || 'Failed to create conversation');
+        }
 
-      console.log('[CustomerService] Conversation created:', newConversation.id);
+        console.log('[CustomerService] Conversation created:', convData.id);
+        newConversation = convData;
 
-      // Save message to Supabase
-      const { data: savedMessage, error: msgError } = await supabase
-        .from('messages')
-        .insert({
-          conversation_id: newConversation.id,
-          sender: 'user',
-          message: messageText
-        })
-        .select()
-        .single();
+        // Save message to Supabase
+        const { data: msgData, error: msgError } = await supabase
+          .from('messages')
+          .insert({
+            conversation_id: newConversation.id,
+            sender: 'user',
+            message: messageText
+          })
+          .select()
+          .single();
 
-      if (msgError) {
-        console.error('[CustomerService] Error saving message:', msgError);
-        toast({
-          title: 'Warning',
-          description: 'Conversation created but message save failed.',
-          variant: 'destructive'
-        });
-        return;
-      }
+        if (msgError) {
+          console.error('[CustomerService] Error saving message:', msgError);
+          throw new Error(msgError?.message || 'Failed to save message');
+        }
 
-      console.log('[CustomerService] Message saved:', savedMessage?.id);
+        console.log('[CustomerService] Message saved:', msgData?.id);
+        savedMessage = msgData;
+        dbSaveSuccess = true;
 
-      // Track message ID to prevent duplicate
-      if (savedMessage?.id) {
-        processedMessageIds.current.add(savedMessage.id);
-      }
+        // Track message ID to prevent duplicate
+        if (savedMessage?.id) {
+          processedMessageIds.current.add(savedMessage.id);
+        }
 
-      // Set conversation and message in state
-      setConversation(newConversation);
-      setMessages([{
-        id: savedMessage?.id || crypto.randomUUID(),
-        content: messageText,
-        is_admin: false,
-        created_at: savedMessage?.created_at || new Date().toISOString()
-      }]);
-      setStep('conversation');
-      setFormData({ full_name: '', phone_number: '', message: '' });
+        // Set conversation and message in state
+        setConversation(newConversation);
+        setMessages([{
+          id: savedMessage?.id || crypto.randomUUID(),
+          content: messageText,
+          is_admin: false,
+          created_at: savedMessage?.created_at || new Date().toISOString()
+        }]);
+        setStep('conversation');
+        setFormData({ full_name: '', phone_number: '', message: '' });
 
-      // Send Telegram notification (don't block)
-      sendToTelegram(messageText, 'new_ticket', newConversation.id);
+        console.log('[CustomerService] DB save completed successfully');
+        return { newConversation, savedMessage };
+      })();
 
-      console.log('[CustomerService] User message sent successfully');
+      await Promise.race([submissionPromise, timeoutPromise]);
+
+      // Show success immediately after DB save
       toast({
         title: 'Message Sent',
         description: 'Your message has been sent. Our team will assist you shortly.',
       });
+
+      // Send Telegram notification in background (non-blocking)
+      if (dbSaveSuccess && newConversation) {
+        sendToTelegram(messageText, 'new_ticket', newConversation.id).catch(err => {
+          console.error('[CustomerService] Telegram notification failed (non-blocking):', err);
+        });
+      }
     } catch (error: any) {
       console.error('[CustomerService] Error submitting message:', error);
+      
+      // If DB save succeeded before timeout, show success instead of error
+      if (dbSaveSuccess && newConversation && savedMessage) {
+        console.log('[CustomerService] DB save succeeded before timeout, showing success');
+        toast({
+          title: 'Message Sent',
+          description: 'Your message has been sent. Our team will assist you shortly.',
+        });
+        
+        // Send Telegram notification in background (non-blocking)
+        sendToTelegram(messageText, 'new_ticket', newConversation.id).catch(err => {
+          console.error('[CustomerService] Telegram notification failed (non-blocking):', err);
+        });
+        return;
+      }
+      
+      const errorMessage = error.message === 'Submission timeout after 15 seconds'
+        ? 'Request timed out. Please check your connection and try again.'
+        : error.message || 'Failed to send message. Please try again.';
+      
       toast({
         title: 'Error',
-        description: error.message || 'Failed to send message. Please try again.',
+        description: errorMessage,
         variant: 'destructive'
       });
     } finally {
+      console.log('[CustomerService] Submission completed, resetting loading state');
       setIsLoading(false);
     }
   };
@@ -601,79 +690,128 @@ const CustomerService: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ i
       }
       console.log('[CustomerService] Attachment upload successful, proceeding with message send');
     }
-    
+
+    let dbSaveSuccess = false;
+    let savedMessage: any = null;
+
+    // Add timeout guard (60 seconds for message sending)
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('Message send timeout after 60 seconds'));
+      }, 60000);
+    });
+
     try {
-      // Build message insert data
-      const messageData: any = {
-        conversation_id: conversation.id,
-        sender: 'user',
-        message: messageText || null
-      };
-      
-      // Add attachment data if present
-      if (attachmentData) {
-        messageData.attachment_url = attachmentData.url;
-        messageData.attachment_type = attachmentData.type;
-        messageData.attachment_name = attachmentData.name;
-        messageData.attachment_size = attachmentData.size;
-      }
-      
-      // Save message to Supabase
-      const { data: savedMessage, error } = await supabase
-        .from('messages')
-        .insert(messageData)
-        .select()
-        .single();
+      // Race between message send and timeout
+      const messageSendPromise = (async () => {
+        // Build message insert data
+        const messageData: any = {
+          conversation_id: conversation.id,
+          sender: 'user',
+          message: messageText || null
+        };
 
-      if (error) {
-        console.error('[CustomerService] Error saving message:', error);
-        throw error;
-      }
+        // Add attachment data if present
+        if (attachmentData) {
+          messageData.attachment_url = attachmentData.url;
+          messageData.attachment_type = attachmentData.type;
+          messageData.attachment_name = attachmentData.name;
+          messageData.attachment_size = attachmentData.size;
+        }
 
-      console.log('[CustomerService] Message saved to Supabase:', savedMessage?.id);
-      
-      // Clear attachment after successful send
-      clearAttachment();
-      
-      // Track the real message ID
-      if (savedMessage?.id) {
-        processedMessageIds.current.add(savedMessage.id);
-        
-        // Replace temp message with real one
-        setMessages(prev => prev.map(msg => 
-          msg.id === tempId ? {
-            id: savedMessage.id,
-            content: messageText,
-            is_admin: false,
-            created_at: savedMessage.created_at,
-            attachment_url: savedMessage.attachment_url
-          } : msg
-        ));
-      }
-      
-      // Send Telegram notification (don't block)
-      const telegramText = attachmentData 
-        ? `${messageText || ''}\n\n[Attachment: ${attachmentData.name}]`.trim()
-        : messageText;
-      sendToTelegram(telegramText, 'reply', conversation.id);
-      
-      console.log('[CustomerService] User reply sent successfully');
+        // Save message to Supabase
+        const { data: msgData, error } = await supabase
+          .from('messages')
+          .insert(messageData)
+          .select()
+          .single();
+
+        if (error) {
+          console.error('[CustomerService] Error saving message:', error);
+          throw error;
+        }
+
+        console.log('[CustomerService] Message saved to Supabase:', msgData?.id);
+        savedMessage = msgData;
+        dbSaveSuccess = true;
+
+        // Clear attachment after successful send
+        clearAttachment();
+
+        // Track the real message ID
+        if (savedMessage?.id) {
+          processedMessageIds.current.add(savedMessage.id);
+
+          // Replace temp message with real one
+          setMessages(prev => prev.map(msg =>
+            msg.id === tempId ? {
+              id: savedMessage.id,
+              content: messageText,
+              is_admin: false,
+              created_at: savedMessage.created_at,
+              attachment_url: savedMessage.attachment_url
+            } : msg
+          ));
+        }
+
+        console.log('[CustomerService] DB save completed successfully');
+        return savedMessage;
+      })();
+
+      await Promise.race([messageSendPromise, timeoutPromise]);
+
+      // Show success immediately after DB save
       toast({
         title: 'Message Sent',
-        description: attachmentData 
+        description: attachmentData
           ? 'Your message and attachment have been sent to customer service.'
           : 'Your message has been sent to customer service.',
       });
+
+      // Send Telegram notification in background (non-blocking)
+      if (dbSaveSuccess && conversation) {
+        const telegramText = attachmentData
+          ? `${messageText || ''}\n\n[Attachment: ${attachmentData.name}]`.trim()
+          : messageText;
+        sendToTelegram(telegramText, 'reply', conversation.id).catch(err => {
+          console.error('[CustomerService] Telegram notification failed (non-blocking):', err);
+        });
+      }
     } catch (error: any) {
       console.error('[CustomerService] Error sending message:', error);
+
+      // If DB save succeeded before timeout, show success instead of error
+      if (dbSaveSuccess && savedMessage) {
+        console.log('[CustomerService] DB save succeeded before timeout, showing success');
+        toast({
+          title: 'Message Sent',
+          description: attachmentData
+            ? 'Your message and attachment have been sent to customer service.'
+            : 'Your message has been sent to customer service.',
+        });
+
+        // Send Telegram notification in background (non-blocking)
+        const telegramText = attachmentData
+          ? `${messageText || ''}\n\n[Attachment: ${attachmentData.name}]`.trim()
+          : messageText;
+        sendToTelegram(telegramText, 'reply', conversation.id).catch(err => {
+          console.error('[CustomerService] Telegram notification failed (non-blocking):', err);
+        });
+        return;
+      }
+
       setErrorMessage(`Failed to send: ${error.message}`);
-      
+
       // Remove the optimistic message on error
       setMessages(prev => prev.filter(msg => msg.id !== tempId));
-      
+
+      const errorMessage = error.message === 'Message send timeout after 60 seconds'
+        ? 'Request timed out. Please check your connection and try again.'
+        : error.message || 'Failed to send message. Please try again.';
+
       toast({
         title: 'Error',
-        description: error.message || 'Failed to send message. Please try again.',
+        description: errorMessage,
         variant: 'destructive'
       });
     } finally {

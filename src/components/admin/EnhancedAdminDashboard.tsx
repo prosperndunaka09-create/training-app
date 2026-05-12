@@ -292,7 +292,7 @@ const EnhancedAdminDashboard: React.FC = () => {
   useEffect(() => {
     const checkAuth = async () => {
       const { data: { session }, error } = await supabase.auth.getSession();
-      
+
       if (error || !session) {
         setIsAuthenticated(false);
         navigate('/');
@@ -313,19 +313,11 @@ const EnhancedAdminDashboard: React.FC = () => {
       }
 
       setIsAuthenticated(true);
-      // Set default data immediately
-      setUsers([]);
-      setWithdrawals([]);
-      setStats({
-        totalUsers: 0, totalPayouts: 0, pendingPayouts: 0, totalBalance: 0,
-        completedTasks: 0, totalTasks: 0, activeToday: 0, pendingWithdrawals: 0, newUsersToday: 0,
-        totalEarnings: 0, averageTasksPerUser: 0, topPerformers: 0, flaggedAccounts: 0,
-      });
-      setIsLoading(false);
+      loadData();
     };
 
     checkAuth();
-  }, [navigate]);
+  }, [navigate, loadData]);
 
   // Setup real-time listeners when authenticated
   useEffect(() => {

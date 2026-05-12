@@ -26,6 +26,9 @@ export interface AdminUser {
   training_completed?: boolean;
   last_login?: string;
   status: 'active' | 'suspended' | 'banned' | 'flagged';
+  // Phase 1 and Phase 2 fields
+  training_phase_1_locked?: boolean;
+  training_phase_2_checkpoint?: any;
 }
 
 interface AdminUsersTableProps {

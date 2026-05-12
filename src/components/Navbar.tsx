@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/contexts/AppContext';
-import { LogOut, User, ChevronDown, Zap, LayoutDashboard, Wallet, ArrowDownToLine, UserCircle, Menu, X, Shield, MessageCircle, ExternalLink, RefreshCw } from 'lucide-react';
+import { useCSNotification } from '@/contexts/CSNotificationContext';
+import { LogOut, User, ChevronDown, Zap, LayoutDashboard, Wallet, ArrowDownToLine, UserCircle, Menu, X, Shield, MessageCircle, ExternalLink, RefreshCw, Badge } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,6 +12,7 @@ import {
 const Navbar: React.FC = () => {
   const navigate = useNavigate();
   const context = useAppContext();
+  const { unreadCount } = useCSNotification();
   const {
     isAuthenticated,
     user,
@@ -20,6 +22,7 @@ const Navbar: React.FC = () => {
     activeTab,
     setActiveTab,
     refreshUser,
+    refreshApp,
     walletState
   } = context;
   
@@ -77,7 +80,8 @@ const openLogin = () => {
   }, {
     id: 'legal',
     label: 'Legal',
-    icon: MessageCircle
+    icon: MessageCircle,
+    hasBadge: true
   }];
 
   const allNavItems = user?.account_type === 'admin' ? [
@@ -151,24 +155,40 @@ const openLogin = () => {
                           {allNavItems.map(item => <button key={item.id} onClick={() => {
                       safeSetActiveTab(item.id);
                       setUserMenuOpen(false);
-                    }} className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-300 hover:bg-white/5 transition-colors">
-                              <item.icon size={16} className="text-gray-500" />
+                    }} className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-300 hover:bg-white/5 transition-colors relative">
+                              <item.icon size={16} className={`text-gray-500 ${item.hasBadge && unreadCount > 0 ? 'animate-pulse text-pink-400' : ''}`} />
                               {item.label}
+                              {item.hasBadge && unreadCount > 0 && (
+                                <div className="absolute top-2 right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center shadow-lg animate-bounce">
+                                  <span className="text-white text-xs font-bold">{unreadCount > 99 ? '99+' : unreadCount}</span>
+                                </div>
+                              )}
                             </button>)}
                         </div>
                         <div className="border-t border-indigo-500/10 py-1">
-                          <button 
-                            onClick={async () => {
-                              await refreshUser();
-                              setUserMenuOpen(false);
+                          <button
+                            onClick={() => {
+                              window.location.reload();
                             }}
                             className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-indigo-400 hover:bg-white/5 transition-colors"
                           >
                             <RefreshCw size={16} />
-                            Reload Account
+                            Refresh Account
                           </button>
-                          <button onClick={() => {
-                      logout();
+                          <button onClick={async () => {
+                      try {
+                        // Add timeout protection to logout
+                        const logoutPromise = logout();
+                        const timeoutPromise = new Promise<never>((_, reject) =>
+                          setTimeout(() => reject(new Error('Logout timeout')), 5000)
+                        );
+                        await Promise.race([logoutPromise, timeoutPromise]);
+                      } catch (err) {
+                        console.error('[Navbar] Logout error or timeout:', err);
+                        // Force logout even if it fails
+                        setUserMenuOpen(false);
+                        window.location.href = '/';
+                      }
                       setUserMenuOpen(false);
                     }} className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/5 transition-colors">
                             <LogOut size={16} />
