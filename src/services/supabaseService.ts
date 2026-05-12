@@ -1072,13 +1072,14 @@ export class SupabaseService {
           return { success: false, error: trainingUpdateError.message };
         }
 
-        // Also update users table - including balance to keep in sync with training_accounts
-        const newBalance = trainingAccount.amount + reward;
+        // Also update users table - including balance to keep in sync with training_accounts + initial capital
+        const INITIAL_TRAINING_BALANCE = 1100;
+        const newBalance = INITIAL_TRAINING_BALANCE + trainingAccount.amount + reward; // Full balance = initial + earned
         const { error: userStatsError } = await supabase
           .from('users')
           .update({
-            balance: newBalance, // Keep users.balance in sync with training_accounts.amount
-            total_earned: newBalance, // Keep total_earned in sync with training_accounts.amount
+            balance: newBalance, // Full training balance = initial capital + earned rewards
+            total_earned: newBalance, // Full training balance = initial capital + earned rewards
             tasks_completed: newTasksCompleted,
             training_progress: trainingProgress,
             updated_at: new Date().toISOString()
@@ -3833,7 +3834,9 @@ export class SupabaseService {
         .eq('auth_user_id', trainingAccountId)
         .single();
 
-      const trainingBalance = freshTraining?.amount || 0;
+      const earnedRewards = freshTraining?.amount || 0;
+      const INITIAL_TRAINING_BALANCE = 1100;
+      const trainingBalance = INITIAL_TRAINING_BALANCE + earnedRewards; // Full training total = initial + earned
       const commissionAmount = trainingBalance * 0.02;
 
       console.log('[Transfer] Processing transfer from training account:', trainingAccount.email, 'training_balance:', trainingBalance, 'commission:', commissionAmount);
@@ -3870,11 +3873,12 @@ export class SupabaseService {
       // Subtract commission from training account balance - update both tables
       const remainingBalance = trainingBalance - commissionAmount;
 
-      // Update training_accounts table
+      // Update training_accounts table - keep earned rewards only (subtract commission from earned)
+      const remainingEarnedRewards = earnedRewards - commissionAmount;
       const { error: trainingAccountsUpdateError } = await supabase
         .from('training_accounts')
         .update({
-          amount: remainingBalance,
+          amount: remainingEarnedRewards,
           updated_at: new Date().toISOString()
         })
         .eq('auth_user_id', trainingAccountId);
@@ -3884,7 +3888,7 @@ export class SupabaseService {
         // Don't fail the transfer if training_accounts update fails, but log it
       }
 
-      // Update users table
+      // Update users table - set to full remaining balance (initial + remaining earned)
       const { error: trainingUpdateError } = await supabase
         .from('users')
         .update({

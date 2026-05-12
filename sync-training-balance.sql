@@ -1,11 +1,11 @@
--- Sync training account balances: update users.balance to match training_accounts.amount
+-- Sync training account balances: update users.balance to include initial training capital (1100) + earned rewards
 -- This fixes existing training accounts where users.balance is out of sync with training_accounts.amount
 
--- Update users.balance for all training accounts to match training_accounts.amount
+-- Update users.balance for all training accounts to include initial capital + earned rewards
 UPDATE users
 SET
-  balance = COALESCE(training_accounts.amount, 0),
-  total_earned = COALESCE(training_accounts.amount, 0),
+  balance = 1100 + COALESCE(training_accounts.amount, 0),
+  total_earned = 1100 + COALESCE(training_accounts.amount, 0),
   updated_at = NOW()
 FROM training_accounts
 WHERE users.id = training_accounts.auth_user_id
@@ -16,7 +16,8 @@ SELECT
   u.email,
   u.account_type,
   u.balance as users_balance,
-  ta.amount as training_accounts_amount,
+  ta.amount as training_accounts_earned,
+  (1100 + COALESCE(ta.amount, 0)) as expected_balance,
   u.total_earned,
   u.commission_transferred
 FROM users u

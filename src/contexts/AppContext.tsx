@@ -585,7 +585,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (trainingAccount && !trainingError) {
           console.log('[loadUserData] Training account found:', trainingAccount);
 
-          // Use users.balance as source of truth - do NOT calculate from training_accounts.amount
+          // Use users.balance as source of truth - should already include initial capital + earned
           const trainingTaskNumber = trainingAccount.task_number || 1; // Next task to complete
           const completedTasks = Math.max(0, trainingTaskNumber - 1);
 
@@ -594,7 +594,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           // Update user state with training account data
           setUser(prev => prev ? {
             ...prev,
-            balance: dbUser.balance, // Use balance from users table as source of truth
+            balance: dbUser.balance, // Use balance from users table (should include initial + earned)
             tasks_completed: completedTasks, // Calculate from task_number
             task_number: trainingTaskNumber, // Next task to complete
             total_earned: dbUser.total_earned, // Use total_earned from users table
@@ -603,7 +603,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
           // Update wallet state with training account balance from users table
           const trainingWallet: WalletState = {
-            available_balance: dbUser.balance, // Use balance from users table as source of truth
+            available_balance: dbUser.balance, // Use balance from users table (should include initial + earned)
             pending_balance: 0,
             total_earned: dbUser.total_earned, // Use total_earned from users table
             total_withdrawn: 0,
@@ -913,7 +913,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setIsAuthenticated(true);
         await loadUserData(trainingUser.id, 'training', trainingUser.email);
       } else {
-        // Fetch user data from users table to get balance
+        // Fetch user data from users table to get balance (should include initial + earned)
         const { data: userData } = await supabase
           .from('users')
           .select('balance, total_earned')
@@ -927,8 +927,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           phone: null,
           display_name: trainingAccount.email.split('@')[0] || 'Training User',
           vip_level: 2 as const,
-          balance: userData?.balance || 0, // Use balance from users table as source of truth
-          total_earned: userData?.total_earned || 0, // Use total_earned from users table as source of truth
+          balance: userData?.balance || 0, // Use balance from users table (should include initial + earned)
+          total_earned: userData?.total_earned || 0, // Use total_earned from users table (should include initial + earned)
           referral_code: '',
           created_at: trainingAccount.created_at,
           account_type: 'training',
@@ -1613,21 +1613,21 @@ else if (
           console.log('[refreshUser] Training account data from Supabase:', trainingAccount);
           const trainingTaskNumber = trainingAccount.task_number || 1;
           const completedTasks = Math.max(0, trainingTaskNumber - 1);
-          
+
           // Fetch current balance and total_earned from database to use as source of truth
           const { data: dbUser } = await supabase
             .from('users')
             .select('balance, total_earned')
             .eq('id', user.id)
             .single();
-          
+
           const dbBalance = dbUser?.balance || 0;
           const dbTotalEarned = dbUser?.total_earned || 0;
-          
+
           setUser(prev => prev ? {
             ...prev,
-            balance: dbBalance, // Use balance from users table as source of truth
-            total_earned: dbTotalEarned, // Use total_earned from users table as source of truth
+            balance: dbBalance, // Use balance from users table (should include initial + earned)
+            total_earned: dbTotalEarned, // Use total_earned from users table (should include initial + earned)
             task_number: trainingTaskNumber, // Next task to complete
             tasks_completed: completedTasks, // Calculate from task_number
             training_progress: completedTasks, // Use calculated value
