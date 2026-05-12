@@ -1072,10 +1072,13 @@ export class SupabaseService {
           return { success: false, error: trainingUpdateError.message };
         }
 
-        // Also update users table for stats (but not balance)
+        // Also update users table - including balance to keep in sync with training_accounts
+        const newBalance = trainingAccount.amount + reward;
         const { error: userStatsError } = await supabase
           .from('users')
           .update({
+            balance: newBalance, // Keep users.balance in sync with training_accounts.amount
+            total_earned: newBalance, // Keep total_earned in sync with training_accounts.amount
             tasks_completed: newTasksCompleted,
             training_progress: trainingProgress,
             updated_at: new Date().toISOString()
@@ -3822,28 +3825,28 @@ export class SupabaseService {
     try {
       const userId = user.id;
       const trainingAccountId = trainingAccount.id;
-      const commissionAmount = trainingAccount.balance * 0.02;
-      
-      console.log('[Transfer] Processing transfer from training account:', trainingAccount.email, 'amount:', commissionAmount);
-      
-      // Fetch fresh balance from database to ensure persistence
+
+      // Fetch training account fresh balance from training_accounts table (source of truth for training earnings)
+      const { data: freshTraining, error: trainingFetchError } = await supabase
+        .from('training_accounts')
+        .select('amount')
+        .eq('auth_user_id', trainingAccountId)
+        .single();
+
+      const trainingBalance = freshTraining?.amount || 0;
+      const commissionAmount = trainingBalance * 0.02;
+
+      console.log('[Transfer] Processing transfer from training account:', trainingAccount.email, 'training_balance:', trainingBalance, 'commission:', commissionAmount);
+
+      // Fetch fresh personal account balance from database
       const { data: freshUser, error: fetchError } = await supabase
         .from('users')
         .select('balance, total_earned')
         .eq('id', userId)
         .single();
-      
+
       const currentBalance = freshUser?.balance || 0;
       const currentTotalEarned = freshUser?.total_earned || 0;
-      
-      // Fetch training account fresh balance
-      const { data: freshTraining, error: trainingFetchError } = await supabase
-        .from('users')
-        .select('balance')
-        .eq('id', trainingAccountId)
-        .single();
-      
-      const trainingBalance = freshTraining?.balance || 0;
       
       // Transfer commission to personal account and activate full features
       // SET personal balance to commission amount only (do not add to existing balance)
@@ -3864,11 +3867,29 @@ export class SupabaseService {
         return { success: false, amount: 0 };
       }
 
-      // Subtract commission from training account balance
+      // Subtract commission from training account balance - update both tables
+      const remainingBalance = trainingBalance - commissionAmount;
+
+      // Update training_accounts table
+      const { error: trainingAccountsUpdateError } = await supabase
+        .from('training_accounts')
+        .update({
+          amount: remainingBalance,
+          updated_at: new Date().toISOString()
+        })
+        .eq('auth_user_id', trainingAccountId);
+
+      if (trainingAccountsUpdateError) {
+        console.error('[processSingleTrainingTransfer] Training accounts table update error:', trainingAccountsUpdateError);
+        // Don't fail the transfer if training_accounts update fails, but log it
+      }
+
+      // Update users table
       const { error: trainingUpdateError } = await supabase
         .from('users')
         .update({
-          balance: trainingBalance - commissionAmount,
+          balance: remainingBalance,
+          total_earned: remainingBalance,
           commission_transferred: true,
           commission_transfer_amount: commissionAmount,
           commission_transferred_at: new Date().toISOString()
