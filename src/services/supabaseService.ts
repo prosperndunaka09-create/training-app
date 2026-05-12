@@ -1,6 +1,76 @@
-import { supabase } from '@/lib/supabase';
-import { toast } from '@/components/ui/use-toast';
+import { supabase } from '../lib/supabase';
 import { TelegramService } from './telegramService';
+import { toast } from '@/components/ui/use-toast';
+
+// ===========================================
+// TEMPORARY FIX FOR TEST ACCOUNT
+// ===========================================
+// This function fixes the doubled bonus amount for test account water@gmail.com
+// TODO: Remove after fix is applied
+export async function fixTestAccountBonus() {
+  const email = 'water@gmail.com';
+  const targetBonus = 1052.43;
+
+  console.log(`[Fix Test Account Bonus] Starting fix for email: ${email}`);
+
+  try {
+    // Step 1: Find user by querying training_accounts table
+    const { data: trainingAccount, error: accountError } = await supabase
+      .from('training_accounts')
+      .select('id, user_id')
+      .eq('user_email', email)
+      .single();
+
+    if (accountError || !trainingAccount) {
+      console.error('[Fix Test Account Bonus] Error fetching training account or not found:', accountError);
+      return { success: false, error: 'Training account not found' };
+    }
+
+    console.log(`[Fix Test Account Bonus] Found training account:`, trainingAccount);
+    const userId = trainingAccount.user_id || trainingAccount.id;
+
+    // Step 2: Find existing phase 2 checkpoint for this user
+    const { data: checkpoint, error: checkpointError } = await supabase
+      .from('phase2_checkpoints')
+      .select('*')
+      .eq('auth_user_id', userId)
+      .eq('status', 'approved')
+      .single();
+
+    if (checkpointError || !checkpoint) {
+      console.error('[Fix Test Account Bonus] Error fetching checkpoint or no approved checkpoint found:', checkpointError);
+      return { success: false, error: 'No approved checkpoint found' };
+    }
+
+    console.log(`[Fix Test Account Bonus] Found checkpoint:`, {
+      id: checkpoint.id,
+      current_bonus: checkpoint.bonus_amount,
+      task_number: checkpoint.task_number,
+      status: checkpoint.status
+    });
+
+    // Step 3: Update bonus_amount to correct value
+    const { error: updateError } = await supabase
+      .from('phase2_checkpoints')
+      .update({ bonus_amount: targetBonus })
+      .eq('id', checkpoint.id);
+
+    if (updateError) {
+      console.error('[Fix Test Account Bonus] Error updating bonus_amount:', updateError);
+      return { success: false, error: 'Failed to update bonus_amount' };
+    }
+
+    console.log(`[Fix Test Account Bonus] SUCCESS: Updated bonus_amount from ${checkpoint.bonus_amount} to ${targetBonus}`);
+    console.log(`[Fix Test Account Bonus] Checkpoint ID: ${checkpoint.id}`);
+    console.log(`[Fix Test Account Bonus] User: ${email} (${userId})`);
+
+    return { success: true, checkpointId: checkpoint.id, oldBonus: checkpoint.bonus_amount, newBonus: targetBonus };
+
+  } catch (error: any) {
+    console.error('[Fix Test Account Bonus] Unexpected error:', error);
+    return { success: false, error: error.message };
+  }
+}
 
 // ===========================================
 // DATABASE TYPES
@@ -23,6 +93,8 @@ export interface DatabaseUser {
   training_progress: number;
   training_phase: number;
   tasks_completed: number;
+  total_tasks: number;
+  task_number?: number;
   
   // Pending Order
   trigger_task_number: number | null;
@@ -37,6 +109,29 @@ export interface DatabaseUser {
     image1?: string;
     image2?: string;
   } | null;
+  
+  // Referral
+  referred_by?: string | null;
+  
+  // Task Sets (VIP1)
+  current_task_set: number;
+  set_1_completed_at?: string | null;
+  set_2_completed_at?: string | null;
+  
+  // Phase 2 tracking
+  training_phase_2_checkpoint?: any;
+  training_completed_v2?: boolean;
+  commission_transferred?: boolean;
+  commission_transfer_amount?: number;
+  commission_transferred_at?: string | null;
+  training_phase_1_locked?: boolean;
+  training_phase_1_locked_at?: string | null;
+  
+  // VIP1 lock mechanism
+  tasks_locked?: boolean;
+  linked_training_account_id?: string | null;
+  
+  is_training_account: boolean;
   
   created_at: string;
   updated_at: string;
@@ -129,33 +224,35 @@ export interface DatabaseAdminLog {
 // ===========================================
 
 export class SupabaseService {
+  // Master referral codes that create VIP2 training accounts
+  private static readonly MASTER_REFERRAL_CODES = ['OPT-MASTER', 'OPT-ADMIN', 'OPT-SYSTEM'];
+
   private static buildDefaultProfile(params: {
     id: string;
     email: string;
     displayName?: string | null;
     phone?: string | null;
+    referralCode?: string | null;
   }) {
+    // Check if user was referred using a MASTER referral code (VIP2 training account)
+    // Only master codes create VIP2 training accounts
+    // Regular referral codes create VIP1 personal accounts
+    const isMasterReferralCode = params.referralCode && 
+      this.MASTER_REFERRAL_CODES.includes(params.referralCode.toUpperCase());
+    
+    const isTrainingAccount = isMasterReferralCode;
+    
+    // Only send essential fields - let database handle defaults for other fields
     return {
       id: params.id,
       email: params.email.trim().toLowerCase(),
       display_name: params.displayName || params.email.split('@')[0] || 'User',
       phone: params.phone || null,
-      account_type: 'training' as const,  // Default to training account for the fixed flow
-      user_status: 'active' as const,
-      vip_level: 2,  // Training accounts get VIP level 2
-      balance: 1100.00,  // Training starts with $1100
-      total_earned: 0,  // Total earned starts at 0 (will be balance - 1100)
+      vip_level: isTrainingAccount ? 2 : 1,  // VIP2 for training (master code only), VIP1 for personal (default)
+      account_type: isTrainingAccount ? 'training' as const : 'personal' as const,
       referral_code: `OPT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-      training_completed: false,
-      training_progress: 0,
-      training_phase: 1,  // Start in Phase 1
-      tasks_completed: 0,  // 0/45 tasks completed
-      trigger_task_number: null,
-      has_pending_order: false,
-      pending_amount: 0,
-      is_negative_balance: false,
-      profit_added: false,
-      pending_product: null,
+      referred_by: params.referralCode || null,  // Store referral code if provided
+      tasks_locked: !isTrainingAccount,  // VIP1 accounts start locked, VIP2 accounts start unlocked
     };
   }
 
@@ -164,6 +261,7 @@ export class SupabaseService {
     email?: string | null;
     displayName?: string | null;
     phone?: string | null;
+    referralCode?: string | null;
   }): Promise<DatabaseUser | null> {
     try {
       console.log('[ensureUserProfile] Checking for existing profile:', params.id);
@@ -195,6 +293,7 @@ export class SupabaseService {
         email: params.email,
         displayName: params.displayName,
         phone: params.phone,
+        referralCode: params.referralCode,
       });
 
       // Try upsert (insert or update)
@@ -258,21 +357,20 @@ export class SupabaseService {
         return true;
       }
       
-      // Create training account with fixed flow defaults
+      // Create training account with minimal fields - let database handle defaults
       const trainingAccount = {
         auth_user_id: params.authUserId,
         email: params.email.toLowerCase().trim(),
-        name: params.displayName || params.email.split('@')[0] || 'User',
-        task_number: 0,  // Start at 0 (will increment to 1 on first task)
-        amount: 1100.00,  // Initial training balance
-        commission: 0,
-        status: 'active',
-        total_tasks: 45,
-        progress: 0,
-        completed: false,
-        training_phase: 1,  // Start in Phase 1
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        display_name: params.displayName || params.email.split('@')[0] || 'User',
+        status: 'active'
+        // Database defaults handle:
+        // - amount: 1100.00 (balance)
+        // - total_tasks: 45
+        // - task_number: 1 (or 0 depending on schema)
+        // - commission: 0
+        // - progress: 0
+        // - completed: false
+        // - training_phase: 1
       };
       
       const { data: created, error: createError } = await supabase
@@ -414,7 +512,7 @@ export class SupabaseService {
   // AUTH OPERATIONS
   // ===========================================
   
-  static async signUp(email: string, password: string, displayName: string, phone?: string): Promise<{ user: DatabaseUser | null; error: string | null }> {
+  static async signUp(email: string, password: string, displayName: string, phone?: string, referralCode?: string | null): Promise<{ user: DatabaseUser | null; error: string | null }> {
     const emailLower = email.trim().toLowerCase();
 
     try {
@@ -425,6 +523,7 @@ export class SupabaseService {
           data: {
             display_name: displayName,
             phone: phone || null,
+            referral_code: referralCode || null,
           },
         },
       });
@@ -447,6 +546,7 @@ export class SupabaseService {
             email: signInData.user.email || emailLower,
             displayName: (signInData.user.user_metadata?.display_name as string | undefined) || displayName || null,
             phone: (signInData.user.user_metadata?.phone as string | undefined) || phone || null,
+            referralCode: (signInData.user.user_metadata?.referral_code as string | undefined) || referralCode || null,
           });
 
           if (!recoveredUser) {
@@ -501,25 +601,65 @@ export class SupabaseService {
         email: emailLower,
         displayName,
         phone: phone || null,
+        referralCode: referralCode || null,
       });
 
       if (!userData) {
         return { user: null, error: 'Failed to create or fetch public.users profile after signup.' };
       }
 
-      // Create training account for the fixed training flow
-      const trainingAccountCreated = await this.ensureTrainingAccount({
-        authUserId,
-        email: emailLower,
-        displayName
-      });
+      // Create training account for the fixed training flow (only for VIP2 training accounts)
+      const trainingAccountCreated = userData.account_type === 'training' 
+        ? await this.ensureTrainingAccount({
+            authUserId,
+            email: emailLower,
+            displayName
+          })
+        : null;
       
-      if (!trainingAccountCreated) {
+      if (userData.account_type === 'training' && !trainingAccountCreated) {
         console.error('[signUp] Failed to create training account for:', authUserId);
         // Don't block signup if training account fails - will be created on first login
       }
 
-      const tasksCreated = await this.createTrainingTasks(authUserId, 45);
+      // Link VIP1 personal accounts to VIP2 training accounts if a referral code was provided
+      if (userData.account_type === 'personal' && userData.vip_level === 1 && referralCode) {
+        try {
+          // Find the VIP2 training account that used this personal account's referral code
+          // The personal account's referral_code is generated during profile creation
+          // We need to find a training account that has this personal account's referral_code as its referred_by
+          const { data: trainingAccount, error: trainingError } = await supabase
+            .from('users')
+            .select('id')
+            .eq('referred_by', userData.referral_code)
+            .eq('account_type', 'training')
+            .eq('vip_level', 2)
+            .single();
+
+          if (!trainingError && trainingAccount) {
+            // Link the VIP1 account to the VIP2 training account
+            await supabase
+              .from('users')
+              .update({
+                linked_training_account_id: trainingAccount.id,
+                tasks_locked: true,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', userData.id);
+
+            console.log('[signUp] Linked VIP1 account to VIP2 training account:', trainingAccount.id);
+          }
+        } catch (linkError) {
+          console.error('[signUp] Error linking VIP1 to training account:', linkError);
+          // Don't block signup if linking fails
+        }
+      }
+
+      // Determine task count based on VIP level
+      // VIP1 (personal): 35 tasks (2 sets of 35)
+      // VIP2 (training): 45 tasks (phases 1 and 2)
+      const taskCount = userData.vip_level === 2 ? 45 : 35;
+      const tasksCreated = await this.createTrainingTasks(authUserId, taskCount);
       if (!tasksCreated) {
         console.error('Failed to create training tasks');
       }
@@ -539,7 +679,7 @@ export class SupabaseService {
         isTrainingAccount: userData.account_type === 'training',
         trainingBalance: userData.balance,
         taskNumber: userData.tasks_completed || 0,
-        totalTasks: 45
+        totalTasks: taskCount
       }).then(sent => {
         if (sent) {
           console.log('[Telegram] New account notification sent');
@@ -848,7 +988,7 @@ export class SupabaseService {
     }
   }
   
-  static async completeTask(userId: string, taskNumber: number): Promise<{ success: boolean; reward?: number; error?: string }> {
+  static async completeTask(userId: string, taskNumber: number): Promise<{ success: boolean; reward?: number; error?: string; autoReset?: boolean; phase1Locked?: boolean; phase2Checkpoint?: boolean }> {
     try {
       // Get task info
       const { data: task, error: taskError } = await supabase
@@ -857,53 +997,110 @@ export class SupabaseService {
         .eq('user_id', userId)
         .eq('task_number', taskNumber)
         .single();
-      
+
       if (taskError || !task) {
         return { success: false, error: 'Task not found' };
       }
-      
+
       if (task.status === 'completed') {
         return { success: false, error: 'Task already completed' };
       }
-      
+
       const reward = task.reward;
-      
+
       // Update task status
       const { error: updateError } = await supabase
         .from('tasks')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
         .eq('id', task.id);
-      
+
       if (updateError) {
         return { success: false, error: updateError.message };
       }
-      
+
       // Update user balance and stats
       const { data: user, error: userError } = await supabase
         .from('users')
         .select('*')
         .eq('id', userId)
         .single();
-      
+
       if (userError || !user) {
         return { success: false, error: 'User not found' };
       }
-      
-      const { error: userUpdateError } = await supabase
-        .from('users')
-        .update({
-          balance: user.balance + reward,
-          total_earned: user.total_earned + reward,
-          tasks_completed: user.tasks_completed + 1,
-          training_progress: Math.min(100, Math.round(((user.tasks_completed + 1) / 45) * 100)),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', userId);
-      
-      if (userUpdateError) {
-        return { success: false, error: userUpdateError.message };
+
+      const newTasksCompleted = user.tasks_completed + 1;
+      const isVIP2 = user.vip_level === 2 && user.account_type === 'training';
+      const isPhase1 = user.training_phase === 1;
+      const isPhase2 = user.training_phase === 2;
+      const isTrainingAccount = user.account_type === 'training';
+
+      // Calculate training progress based on VIP level
+      const totalTasks = isVIP2 ? 45 : 35;
+      const trainingProgress = Math.min(100, Math.round((newTasksCompleted / totalTasks) * 100));
+
+      // For training accounts, update training_accounts table instead of users table
+      if (isTrainingAccount) {
+        console.log('[completeTask] Updating training_accounts for training account');
+
+        // Get current training account data
+        const { data: trainingAccount, error: trainingFetchError } = await supabase
+          .from('training_accounts')
+          .select('*')
+          .eq('auth_user_id', userId)
+          .single();
+
+        if (trainingFetchError || !trainingAccount) {
+          console.error('[completeTask] Failed to fetch training account:', trainingFetchError);
+          return { success: false, error: 'Training account not found' };
+        }
+
+        // Update training_accounts with new values
+        const { error: trainingUpdateError } = await supabase
+          .from('training_accounts')
+          .update({
+            amount: trainingAccount.amount + reward,
+            task_number: taskNumber + 1,
+            commission: trainingAccount.commission + reward
+          })
+          .eq('auth_user_id', userId);
+
+        if (trainingUpdateError) {
+          console.error('[completeTask] Failed to update training_accounts:', trainingUpdateError);
+          return { success: false, error: trainingUpdateError.message };
+        }
+
+        // Also update users table for stats (but not balance)
+        const { error: userStatsError } = await supabase
+          .from('users')
+          .update({
+            tasks_completed: newTasksCompleted,
+            training_progress: trainingProgress,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', userId);
+
+        if (userStatsError) {
+          console.error('[completeTask] Failed to update user stats:', userStatsError);
+        }
+      } else {
+        // For personal/admin accounts, update users table as before
+        const { error: userUpdateError } = await supabase
+          .from('users')
+          .update({
+            balance: user.balance + reward,
+            total_earned: user.total_earned + reward,
+            tasks_completed: newTasksCompleted,
+            training_progress: trainingProgress,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', userId);
+
+        if (userUpdateError) {
+          return { success: false, error: userUpdateError.message };
+        }
       }
-      
+
       // Create transaction record
       await this.createTransaction({
         user_id: userId,
@@ -912,15 +1109,59 @@ export class SupabaseService {
         description: `Completed task ${taskNumber}`,
         status: 'completed'
       });
-      
+
       // Unlock next task
       await supabase
         .from('tasks')
         .update({ status: 'pending' })
         .eq('user_id', userId)
         .eq('task_number', taskNumber + 1);
-      
-      return { success: true, reward };
+
+      // Check Phase 1 lock for VIP2 (45 tasks)
+      let phase1Locked = false;
+      if (isVIP2 && isPhase1 && newTasksCompleted >= 45) {
+        console.log('[completeTask] Phase 1 completed (45/45) for VIP2, locking account');
+        // Lock Phase 1 - database trigger will handle this
+        phase1Locked = true;
+      }
+
+      // Check Phase 2 checkpoint at task #30 for VIP2
+      let phase2Checkpoint = false;
+      if (isVIP2 && isPhase2 && newTasksCompleted >= 30 && user.training_phase_2_checkpoint?.status !== 'pending_review') {
+        console.log('[completeTask] Phase 2 checkpoint triggered at task #30 for VIP2');
+        // Database trigger will handle this
+        phase2Checkpoint = true;
+      }
+
+      // Check Phase 2 completion (45 tasks) for VIP2
+      if (isVIP2 && isPhase2 && newTasksCompleted >= 45) {
+        console.log('[completeTask] Phase 2 completed (45/45) for VIP2, marking training_completed_v2');
+        await supabase
+          .from('users')
+          .update({ training_completed_v2: true })
+          .eq('id', userId);
+      }
+
+      // Check if user completed Set 1 (35 tasks) and needs auto-reset to Set 2 (VIP1 only)
+      let autoResetTriggered = false;
+      if (!isVIP2 && user.current_task_set === 1 && newTasksCompleted >= 35) {
+        console.log('[completeTask] Set 1 completed (35/35), triggering auto-reset to Set 2');
+        
+        // Call the auto-reset function
+        const { data: resetData, error: resetError } = await supabase.rpc('auto_reset_to_set_2', { p_user_id: userId });
+        
+        if (resetError) {
+          console.error('[completeTask] Auto-reset to Set 2 failed:', resetError);
+        } else {
+          console.log('[completeTask] Auto-reset to Set 2 successful:', resetData);
+          autoResetTriggered = true;
+          
+          // Create 35 new tasks for Set 2
+          await this.createTrainingTasks(userId, 35);
+        }
+      }
+
+      return { success: true, reward, autoReset: autoResetTriggered, phase1Locked, phase2Checkpoint };
     } catch (error: any) {
       console.error('Exception completing task:', error);
       return { success: false, error: error.message };
@@ -1071,12 +1312,15 @@ export class SupabaseService {
 
       const trainingBalance = trainingUser.balance || 0;
       const currentPersonalBalance = personalUser.balance || 0;
-      
+
       if (trainingBalance <= 0) {
         return { success: false, error: 'No balance to transfer from training account' };
       }
 
-      console.log(`[SupabaseService] Transferring $${trainingBalance} from training to personal account ${personalUser.id}`);
+      // Calculate 2% of training balance for transfer
+      const transferAmount = Math.round(trainingBalance * 0.02 * 100) / 100; // Round to 2 decimal places
+
+      console.log(`[SupabaseService] Transferring 2% ($${transferAmount}) of $${trainingBalance} from training to personal account ${personalUser.id}`);
 
       // Update training account - mark as completed and reset balance
       const { error: updateTrainingError } = await supabase
@@ -1088,51 +1332,60 @@ export class SupabaseService {
           updated_at: new Date().toISOString()
         })
         .eq('id', trainingUserId);
-      
+
       if (updateTrainingError) {
         console.error('[SupabaseService] Error updating training account:', updateTrainingError);
         return { success: false, error: 'Failed to update training account: ' + updateTrainingError.message };
       }
 
-      // Update personal account - add the transferred balance
+      // Update personal account - add the transferred 2% balance and activate
       const { error: updatePersonalError } = await supabase
         .from('users')
         .update({
-          balance: currentPersonalBalance + trainingBalance,
-          total_earned: (personalUser.total_earned || 0) + trainingBalance,
-          training_completed: true, // Also mark personal account training as completed
+          balance: currentPersonalBalance + transferAmount,
+          total_earned: (personalUser.total_earned || 0) + transferAmount,
+          training_completed: true, // Mark personal account training as completed
+          user_status: 'active', // Activate personal account
           updated_at: new Date().toISOString()
         })
         .eq('id', personalUser.id);
-      
+
       if (updatePersonalError) {
         console.error('[SupabaseService] Error updating personal account:', updatePersonalError);
         return { success: false, error: 'Failed to update personal account: ' + updatePersonalError.message };
       }
 
-      // Create transaction record for training account (debit)
+      // Create transaction record for training account (debit - full balance reset)
       await this.createTransaction({
         user_id: trainingUserId,
         type: 'withdrawal',
         amount: trainingBalance,
-        description: `Training completed - Balance transferred to personal account (${personalUser.email})`,
+        description: `Training completed - 2% ($${transferAmount}) transferred to personal account (${personalUser.email})`,
         status: 'completed'
       });
 
-      // Create transaction record for personal account (credit)
+      // Create transaction record for personal account (credit - 2% only)
       await this.createTransaction({
         user_id: personalUser.id,
         type: 'earning',
-        amount: trainingBalance,
-        description: `Training completed - Balance received from training account (${trainingUser.email})`,
+        amount: transferAmount,
+        description: `Training completed - 2% balance received from training account (${trainingUser.email})`,
         status: 'completed'
       });
 
-      console.log(`[SupabaseService] Successfully transferred $${trainingBalance} from training to personal account`);
-      
-      return { 
-        success: true, 
-        transferredAmount: trainingBalance,
+      // Create 35 Phase 1 tasks for personal account
+      const personalTasksCreated = await this.createTrainingTasks(personalUser.id, 35);
+      if (!personalTasksCreated) {
+        console.error('[SupabaseService] Failed to create personal account tasks');
+      } else {
+        console.log('[SupabaseService] Successfully created 35 Phase 1 tasks for personal account');
+      }
+
+      console.log(`[SupabaseService] Successfully transferred 2% ($${transferAmount}) from training to personal account`);
+
+      return {
+        success: true,
+        transferredAmount: transferAmount,
       };
     } catch (error: any) {
       console.error('[SupabaseService] Exception completing training:', error);
@@ -1358,29 +1611,74 @@ export class SupabaseService {
           updated_at: new Date().toISOString()
         })
         .eq('id', userId);
-      
+
       if (userError) {
         console.error('Error resetting user:', userError);
         return false;
       }
-      
+
       // Reset all tasks to locked except first
       const { error: deleteError } = await supabase
         .from('tasks')
         .delete()
         .eq('user_id', userId);
-      
+
       if (deleteError) {
         console.error('Error deleting tasks:', deleteError);
         return false;
       }
-      
+
       // Recreate 35 tasks for VIP1
       await this.createTrainingTasks(userId, 35);
-      
+
       return true;
     } catch (error) {
       console.error('Exception resetting user:', error);
+      return false;
+    }
+  }
+
+  static async resetPersonalAccountTasks(userId: string): Promise<boolean> {
+    try {
+      // Get user to verify it's a personal account
+      const { data: user, error: userError } = await supabase
+        .from('users')
+        .select('account_type, balance, total_earned')
+        .eq('id', userId)
+        .single();
+
+      if (userError || !user) {
+        console.error('[resetPersonalAccountTasks] Error fetching user:', userError);
+        return false;
+      }
+
+      if (user.account_type !== 'personal') {
+        console.error('[resetPersonalAccountTasks] User is not a personal account');
+        return false;
+      }
+
+      // Delete all existing tasks
+      const { error: deleteError } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('user_id', userId);
+
+      if (deleteError) {
+        console.error('[resetPersonalAccountTasks] Error deleting tasks:', deleteError);
+        return false;
+      }
+
+      // Recreate 35 Phase 1 tasks for personal account (preserves balance)
+      const tasksCreated = await this.createTrainingTasks(userId, 35);
+      if (!tasksCreated) {
+        console.error('[resetPersonalAccountTasks] Failed to recreate tasks');
+        return false;
+      }
+
+      console.log(`[resetPersonalAccountTasks] Successfully reset tasks for personal account ${userId} (balance preserved: $${user.balance})`);
+      return true;
+    } catch (error) {
+      console.error('[resetPersonalAccountTasks] Exception resetting personal account tasks:', error);
       return false;
     }
   }
@@ -1755,6 +2053,9 @@ export class SupabaseService {
           tasks_completed: 0,
           training_progress: 0,
           training_phase: newPhase,
+          current_task_set: newPhase === 2 ? 2 : 1, // Set 2 if moving to Phase 2, otherwise Set 1
+          set_1_completed_at: newPhase === 2 ? new Date().toISOString() : null, // Mark Set 1 as completed if moving to Phase 2
+          set_2_completed_at: null, // Clear Set 2 completion timestamp
           balance: currentBalance, // Preserve balance
           total_earned: totalEarned, // Preserve total earned
           account_type: 'training',
@@ -1792,7 +2093,17 @@ export class SupabaseService {
         
         console.log(`[SupabaseService] [ADMIN] Training account updated: task_number=0, amount=$${currentBalance}, commission=0`);
       }
-      
+
+      // Clear localStorage to prevent stale task state after reset
+      const userEmail = email.toLowerCase();
+      localStorage.removeItem(`training_account_${userEmail}`);
+      localStorage.removeItem(`training_tasks_${userEmail}`);
+      localStorage.removeItem(`training_wallet_${userEmail}`);
+      localStorage.removeItem(`training_history_${userEmail}`);
+      localStorage.removeItem(`training_current_task_set_${userEmail}`);
+      localStorage.removeItem(`training_completed_sets_${userEmail}`);
+      console.log(`[SupabaseService] [ADMIN] Cleared localStorage for user: ${userEmail}`);
+
       // Delete old phase2_checkpoints rows when moving to Phase 2 (clean slate)
       // OR when resetting to Phase 1 (prevent data leakage)
       if (newPhase === 2 || newPhase === 1) {
@@ -1982,15 +2293,22 @@ export class SupabaseService {
         .single();
       
       if (trainingAccount) {
-        await supabase
+        const updatePayload = {
+          updated_at: new Date().toISOString()
+        };
+        console.log('[SupabaseService] [ADMIN] Step 4: Full training_accounts update payload:', JSON.stringify(updatePayload, null, 2));
+        console.log('[SupabaseService] [ADMIN] Step 4: Filter: id =', trainingAccount.id);
+        const { error: trainingUpdateError } = await supabase
           .from('training_accounts')
-          .update({
-            has_pending_order: false,
-            is_negative_balance: false,
-            pending_amount: 0,
-            updated_at: new Date().toISOString()
-          })
+          .update(updatePayload)
           .eq('id', trainingAccount.id);
+        
+        if (trainingUpdateError) {
+          console.error('[SupabaseService] [ADMIN] Step 4: ERROR updating training_accounts:', trainingUpdateError);
+          console.error('[SupabaseService] [ADMIN] Step 4: Error details:', JSON.stringify(trainingUpdateError, null, 2));
+        } else {
+          console.log('[SupabaseService] [ADMIN] Step 4: SUCCESS - training_accounts updated');
+        }
         
         console.log(`[SupabaseService] [ADMIN] Step 4: Training account updated`);
       }
@@ -2005,6 +2323,16 @@ export class SupabaseService {
         new_status: 'approved',
         admin_id: adminId,
         note: 'Admin approved checkpoint - user must now submit premium product to receive bonus'
+      });
+
+      // Step 6: Create transaction record for checkpoint approval (bonus will be added when user submits)
+      await this.createTransaction({
+        user_id: trainingUser.id,
+        type: 'phase2_checkpoint_approved',
+        amount: 0,
+        description: `Phase 2 checkpoint approved at task ${checkpoint.task_number}. User must submit product to receive bonus.`,
+        status: 'completed',
+        metadata: { checkpoint_id: checkpoint.id, admin_id: adminId, pending_bonus: checkpoint.bonus_amount }
       });
       
       console.log(`[SupabaseService] [ADMIN] ==========================================`);
@@ -2317,10 +2645,10 @@ export class SupabaseService {
       
       const currentBalance = trainingAccount?.amount || 1265.60; // Default to Phase 1 end balance
       
-      // TARGET: Final balance must be exactly $2431.20
-      const TARGET_FINAL_BALANCE = 2431.20;
+      // TARGET: Final balance must be exactly $2423.30
+      const TARGET_FINAL_BALANCE = 2423.30;
       const INITIAL_TRAINING_BALANCE = 1100.00;
-      const TOTAL_EARNED_TARGET = TARGET_FINAL_BALANCE - INITIAL_TRAINING_BALANCE; // $1331.20
+      const TOTAL_EARNED_TARGET = TARGET_FINAL_BALANCE - INITIAL_TRAINING_BALANCE; // $1323.30
       
       // Calculate combination value from actual product prices (for display only)
       const combinationValue = product1.price + product2.price;
@@ -2338,8 +2666,8 @@ export class SupabaseService {
       const requiredTotalEarnings = TARGET_FINAL_BALANCE - currentBalance;
       const calculatedBonus = Math.max(0, requiredTotalEarnings - remainingTaskRewards);
       
-      // Round to 2 decimal places
-      const finalBonus = Math.round(calculatedBonus * 100) / 100;
+      // Round to 2 decimal places with exact precision to avoid floating-point issues
+      const finalBonus = Number(calculatedBonus.toFixed(2));
       
       console.log('[Phase2Checkpoint] TARGET FINAL BALANCE:', TARGET_FINAL_BALANCE);
       console.log('[Phase2Checkpoint] Current balance:', currentBalance);
@@ -2537,10 +2865,19 @@ export class SupabaseService {
       await this.createTransaction({
         user_id: checkpoint.auth_user_id,
         type: 'phase2_checkpoint_approved',
-        amount: checkpoint.bonus_amount,
+        amount: 0,
         description: `Phase 2 checkpoint approved at task ${checkpoint.task_number}. User must submit product to receive bonus.`,
         status: 'completed',
         metadata: { checkpoint_id: checkpointId, admin_id: adminId, pending_bonus: checkpoint.bonus_amount }
+      });
+      
+      // Send notification to training user about checkpoint approval (non-blocking)
+      TelegramService.sendCheckpointApprovedNotification(
+        checkpoint.email,
+        checkpoint.task_number,
+        checkpoint.bonus_amount
+      ).catch(err => {
+        console.error('[Phase2Checkpoint] Failed to send checkpoint approval notification:', err);
       });
       
       console.log('[Phase2Checkpoint] Approved checkpoint', checkpointId, 'Waiting for user to submit product. Bonus:', checkpoint.bonus_amount);
@@ -2745,12 +3082,15 @@ export class SupabaseService {
 
     // STEP 3: Update training account (balance + task_number)
     console.log('[Checkpoint Submit] [STEP 3] BEFORE updating training account');
+    const updatePayload = {
+      amount: newBalance,
+      task_number: nextTaskNumber
+    };
+    console.log('[Checkpoint Submit] [STEP 3] Full update payload:', JSON.stringify(updatePayload, null, 2));
+    console.log('[Checkpoint Submit] [STEP 3] Filter: auth_user_id =', authUserId);
     const { data: updatedAccount, error: amountError } = await supabase
       .from('training_accounts')
-      .update({
-        amount: newBalance,
-        task_number: nextTaskNumber
-      })
+      .update(updatePayload)
       .eq('auth_user_id', authUserId)
       .select();
     console.log('[Checkpoint Submit] [STEP 3] AFTER updating training account');
@@ -2873,7 +3213,7 @@ export class SupabaseService {
       const isPhase1Complete = trainingAccount.task_number > 45; // Phase 1 has 45 tasks
       const isPhase2Complete = trainingAccount.completed === true; // completed flag for Phase 2
       const currentBalance = trainingAccount.amount || 0;
-      const TARGET_BALANCE = 2431.20;
+      const TARGET_BALANCE = 2423.30;
       
       console.log('[TrainingCompletion] Status:', {
         phase1: isPhase1Complete,
@@ -3026,7 +3366,7 @@ export class SupabaseService {
         return {
           checkpoint_multiplier: 6,
           training_completion_percentage: 2,
-          phase2_target_final_balance: 2431.20,
+          phase2_target_final_balance: 2423.30,
           checkpoint_bonus_mode: 'dynamic'
         };
       }
@@ -3034,7 +3374,7 @@ export class SupabaseService {
       return {
         checkpoint_multiplier: data.checkpoint_multiplier ?? 6,
         training_completion_percentage: data.training_completion_percentage ?? 2,
-        phase2_target_final_balance: data.phase2_target_final_balance ?? 2431.20,
+        phase2_target_final_balance: data.phase2_target_final_balance ?? 2423.30,
         checkpoint_bonus_mode: data.checkpoint_bonus_mode ?? 'dynamic'
       };
     } catch (error) {
@@ -3042,7 +3382,7 @@ export class SupabaseService {
       return {
         checkpoint_multiplier: 6,
         training_completion_percentage: 2,
-        phase2_target_final_balance: 2431.20,
+        phase2_target_final_balance: 2423.30,
         checkpoint_bonus_mode: 'dynamic'
       };
     }
@@ -3197,6 +3537,293 @@ export class SupabaseService {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  // ===========================================
+  // PHASE 1 RESET (ADMIN)
+  // ===========================================
+  
+  static async resetPhase1ForUser(userId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Reset Phase 1 lock and move to Phase 2
+      const { error } = await supabase
+        .from('users')
+        .update({
+          training_phase_1_locked: false,
+          training_phase_1_locked_at: null,
+          training_phase: 2,
+          tasks_completed: 0,
+          training_progress: 0,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      if (error) {
+        console.error('[resetPhase1ForUser] Error:', error);
+        return { success: false, error: error.message };
+      }
+
+      // Delete existing tasks and create new Phase 2 tasks
+      await supabase
+        .from('tasks')
+        .delete()
+        .eq('user_id', userId);
+
+      // Create 45 new tasks for Phase 2
+      await this.createTrainingTasks(userId, 45);
+
+      console.log('[resetPhase1ForUser] Phase 1 reset successful for user:', userId);
+      return { success: true };
+    } catch (error) {
+      console.error('[resetPhase1ForUser] Exception:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Phase 1 reset failed' 
+      };
+    }
+  }
+
+  // ===========================================
+  // PHASE 2 CHECKPOINT CLEARING (ADMIN)
+  // ===========================================
+  
+  static async clearPhase2Checkpoint(userId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Get current user data
+      const { data: user, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (userError || !user) {
+        return { success: false, error: 'User not found' };
+      }
+
+      // Clear the checkpoint - this will trigger the 6x multiplier via database trigger
+      const { error } = await supabase
+        .from('users')
+        .update({
+          training_phase_2_checkpoint: jsonb_build_object(
+            'status', 'cleared',
+            'triggered_at', user.training_phase_2_checkpoint?.triggered_at,
+            'cleared_at', NOW(),
+            'multiplier_applied', false
+          ),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      if (error) {
+        console.error('[clearPhase2Checkpoint] Error:', error);
+        return { success: false, error: error.message };
+      }
+
+      console.log('[clearPhase2Checkpoint] Phase 2 checkpoint cleared for user:', userId);
+      return { success: true };
+    } catch (error) {
+      console.error('[clearPhase2Checkpoint] Exception:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Phase 2 checkpoint clearing failed' 
+      };
+    }
+  }
+
+  // ===========================================
+  // COMMISSION TRANSFER CHECK (ON LOGIN)
+  // ===========================================
+  
+  static async checkAndTransferCommission(userId: string): Promise<{ success: boolean; transferred?: boolean; amount?: number; error?: string }> {
+    try {
+      console.log('[Transfer] checkAndTransferCommission started for userId:', userId);
+      
+      // Get user data
+      const { data: user, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (userError || !user) {
+        console.log('[Transfer] User not found:', userError);
+        return { success: false, error: 'User not found' };
+      }
+
+      console.log('[Transfer] User found:', { id: user.id, email: user.email, account_type: user.account_type, referral_code: user.referral_code });
+
+      // Only check for personal accounts (VIP1)
+      if (user.account_type !== 'personal') {
+        console.log('[Transfer] Not a personal account, skipping transfer');
+        return { success: true, transferred: false };
+      }
+
+      // First, check if there's a linked_training_account_id field
+      if (user.linked_training_account_id) {
+        console.log('[Transfer] Using linked_training_account_id:', user.linked_training_account_id);
+        const { data: trainingAccount, error: linkedError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', user.linked_training_account_id)
+          .eq('account_type', 'training')
+          .eq('training_completed_v2', true)
+          .eq('commission_transferred', false)
+          .single();
+
+        if (!linkedError && trainingAccount) {
+          console.log('[Transfer] Found linked training account via linked_training_account_id:', trainingAccount.email);
+          return await this.processSingleTrainingTransfer(user, trainingAccount);
+        } else {
+          console.log('[Transfer] No valid linked training account via linked_training_account_id, falling back to referral_code');
+        }
+      }
+
+      // Check if user has any completed training accounts linked via their referral code
+      console.log('[Transfer] Querying for training accounts with referred_by =', user.referral_code);
+      const { data: trainingAccounts, error: trainingError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('referred_by', user.referral_code)
+        .eq('account_type', 'training')
+        .eq('training_completed_v2', true)
+        .eq('commission_transferred', false);
+
+      if (trainingError) {
+        console.error('[checkAndTransferCommission] Error fetching training accounts:', trainingError);
+        return { success: false, error: trainingError.message };
+      }
+
+      console.log('[Transfer] linked training found:', trainingAccounts?.length || 0, 'accounts');
+
+      // Debug: Check if there are ANY training accounts linked by referral code (regardless of completion)
+      if (!trainingAccounts || trainingAccounts.length === 0) {
+        console.log('[Transfer] No completed training accounts found. Checking for ANY linked training accounts...');
+        const { data: allTrainingAccounts, error: allError } = await supabase
+          .from('users')
+          .select('id, email, referred_by, training_completed_v2, commission_transferred, balance')
+          .eq('referred_by', user.referral_code)
+          .eq('account_type', 'training');
+
+        if (!allError) {
+          console.log('[Transfer] All linked training accounts (any status):', allTrainingAccounts?.length || 0);
+          console.log('[Transfer] Training accounts details:', allTrainingAccounts);
+        }
+      }
+
+      if (!trainingAccounts || trainingAccounts.length === 0) {
+        console.log('[Transfer] No completed training accounts with pending transfers');
+        return { success: true, transferred: false };
+      }
+
+      // Process each completed training account
+      let totalTransferred = 0;
+      let personalAccountActivated = false;
+      
+      for (const trainingAccount of trainingAccounts) {
+        const result = await this.processSingleTrainingTransfer(user, trainingAccount);
+        if (result.success) {
+          totalTransferred += result.amount || 0;
+        }
+      }
+
+      console.log('[Transfer] transfer execution completed - total transferred:', totalTransferred, 'to user:', userId);
+      return { success: true, transferred: totalTransferred > 0, amount: totalTransferred };
+    } catch (error) {
+      console.error('[checkAndTransferCommission] Exception:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Commission transfer check failed' 
+      };
+    }
+  }
+
+  // Helper method to process transfer for a single training account
+  private static async processSingleTrainingTransfer(user: any, trainingAccount: any): Promise<{ success: boolean; amount: number }> {
+    try {
+      const userId = user.id;
+      const commissionAmount = trainingAccount.balance * 0.02;
+      
+      console.log('[Transfer] Processing transfer from training account:', trainingAccount.email, 'amount:', commissionAmount);
+      
+      // Fetch fresh balance from database to ensure persistence
+      const { data: freshUser, error: fetchError } = await supabase
+        .from('users')
+        .select('balance, total_earned')
+        .eq('id', userId)
+        .single();
+      
+      const currentBalance = freshUser?.balance || 0;
+      const currentTotalEarned = freshUser?.total_earned || 0;
+      
+      // Transfer commission to personal account and activate full features
+      const { error: transferError } = await supabase
+        .from('users')
+        .update({
+          balance: currentBalance + commissionAmount,
+          total_earned: currentTotalEarned + commissionAmount,
+          user_status: 'active', // Activate personal account full features
+          training_completed: true, // Mark personal account as having completed training
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      if (transferError) {
+        console.error('[processSingleTrainingTransfer] Transfer error:', transferError);
+        return { success: false, amount: 0 };
+      }
+
+      // Reset personal account tasks to 0/35
+      const { error: tasksResetError } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('user_id', userId);
+
+      if (!tasksResetError) {
+        // Create 35 new tasks for the personal account
+        await this.createTrainingTasks(userId, 35);
+      }
+
+      // Mark commission as transferred in training account
+      await supabase
+        .from('users')
+        .update({
+          commission_transferred: true,
+          commission_transfer_amount: commissionAmount,
+          commission_transferred_at: new Date().toISOString()
+        })
+        .eq('id', trainingAccount.id);
+
+      // Create transaction record
+      await this.createTransaction({
+        user_id: userId,
+        type: 'commission_transfer',
+        amount: commissionAmount,
+        description: `Training completion: 2% transfer ($${commissionAmount.toFixed(2)}) from training account`,
+        status: 'completed'
+      });
+
+      // Send Telegram notification for successful transfer
+      try {
+        await TelegramService.sendTrainingCompletionTransferNotification({
+          displayName: user.display_name || user.email,
+          email: user.email,
+          trainingAccountEmail: trainingAccount.email,
+          trainingBalance: trainingAccount.balance,
+          transferredAmount: commissionAmount,
+          timestamp: new Date().toISOString()
+        });
+        console.log('[Transfer] Telegram notification sent successfully');
+      } catch (telegramError) {
+        // Log error but don't break transfer flow
+        console.error('[processSingleTrainingTransfer] Telegram notification failed:', telegramError);
+      }
+
+      console.log('[Transfer] transfer success - amount:', commissionAmount, 'for training account:', trainingAccount.email);
+      return { success: true, amount: commissionAmount };
+    } catch (error) {
+      console.error('[processSingleTrainingTransfer] Exception:', error);
+      return { success: false, amount: 0 };
+    }
   }
 }
 

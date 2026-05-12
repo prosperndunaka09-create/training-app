@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
-import { CheckCircle, Lock, Zap, Loader2, DollarSign, Award, Star, ShoppingBag, Send, Package, Headphones, AlertTriangle, MessageCircle, ArrowRight, Plus, Sparkles, Crown, GraduationCap } from 'lucide-react';
+import { useCSNotification } from '@/contexts/CSNotificationContext';
+import { CheckCircle, Lock, Zap, Loader2, DollarSign, Award, Star, ShoppingBag, Send, Package, Headphones, AlertTriangle, MessageCircle, ArrowRight, Plus, Sparkles, Crown, GraduationCap, Trophy, Badge } from 'lucide-react';
 import DailyBonus from './DailyBonus';
 import Phase2Checkpoint from './Phase2Checkpoint';
 import { toast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import ProductCatalogService, { Product } from '@/services/productCatalogService';
 import SupabaseService from '@/services/supabaseService';
 import { supabase } from '@/lib/supabase';
@@ -65,11 +67,30 @@ const SimpleProductCard: React.FC<{
   reward: number;
   taskNumber: number;
   totalTasks: number;
-  onSubmit: () => void;
+  onSubmit: (e?: React.MouseEvent) => void;
   isSubmitting: boolean;
   isTraining: boolean;
   hasPendingOrder?: boolean;
 }> = ({ product, reward, taskNumber, totalTasks, onSubmit, isSubmitting, isTraining, hasPendingOrder }) => {
+  const clickLockRef = useRef(false);
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
+
+  const handleSingleSubmit = (e: React.PointerEvent) => {
+    e.preventDefault?.();
+    e.stopPropagation?.();
+
+    if (clickLockRef.current || isSubmitting) {
+      return;
+    }
+
+    clickLockRef.current = true;
+    onSubmit(e as any);
+
+    setTimeout(() => {
+      clickLockRef.current = false;
+    }, 500);
+  };
+
   return (
     <div className="w-full max-w-md mx-auto">
       <div className="relative bg-gradient-to-br from-white/[0.08] to-white/[0.02] border border-white/[0.12] rounded-3xl overflow-hidden p-6 text-center shadow-2xl">
@@ -81,12 +102,18 @@ const SimpleProductCard: React.FC<{
         </div>
 
         <div className="mb-4 min-h-[260px] flex items-center justify-center">
-          <img
-            src={product.image}
-            alt={product.name}
-            className="w-full h-64 object-contain rounded-2xl bg-gradient-to-br from-white/[0.05] to-transparent"
-            onError={(e) => { e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23e5e7eb%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%239ca3af%22%3ENo Image%3C/text%3E%3C/svg%3E'; }}
-          />
+          {imageLoadFailed ? (
+            <div className="w-full h-64 flex items-center justify-center rounded-2xl bg-gradient-to-br from-white/[0.05] to-transparent">
+              <Package className="w-16 h-16 text-indigo-300/80" />
+            </div>
+          ) : (
+            <img
+              src={product.image}
+              alt={product.name}
+              className="w-full h-64 object-contain rounded-2xl bg-gradient-to-br from-white/[0.05] to-transparent"
+              onError={() => setImageLoadFailed(true)}
+            />
+          )}
         </div>
 
         <h3 className="text-xl font-bold text-white mb-1">{product.name}</h3>
@@ -102,12 +129,17 @@ const SimpleProductCard: React.FC<{
 
         {hasPendingOrder ? (
           <div className="w-full py-4 font-bold rounded-2xl bg-gradient-to-r from-red-600 via-red-500 to-rose-600 text-white flex items-center justify-center gap-2 text-lg cursor-not-allowed">
-            <AlertTriangle size={20} />
-            <span>Pending Order - Contact Support</span>
+            <AlertTriangle size={20} style={{ pointerEvents: 'none' }} />
+            <span style={{ pointerEvents: 'none' }}>Pending Order - Contact Support</span>
           </div>
         ) : (
-          <button onClick={onSubmit} disabled={isSubmitting} className="w-full py-4 font-bold rounded-2xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2 text-lg disabled:opacity-60 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:via-purple-500 hover:to-pink-500 text-white">
-            {isSubmitting ? <><Loader2 size={20} className="animate-spin" /><span>Processing...</span></> : <><Send size={20} /><span>Submit Task</span><span className="ml-2 px-2 py-0.5 bg-white/20 rounded-full text-sm">+${reward.toFixed(2)}</span></>}
+          <button 
+            type="button"
+            onPointerUp={handleSingleSubmit}
+            disabled={isSubmitting} 
+            className="w-full py-4 font-bold rounded-2xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2 text-lg disabled:opacity-60 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:via-purple-500 hover:to-pink-500 text-white"
+          >
+            {isSubmitting ? <><Loader2 size={20} className="animate-spin" style={{ pointerEvents: 'none' }} /><span style={{ pointerEvents: 'none' }}>Processing...</span></> : <><Send size={20} style={{ pointerEvents: 'none' }} /><span style={{ pointerEvents: 'none' }}>Submit Task</span><span className="ml-2 px-2 py-0.5 bg-white/20 rounded-full text-sm" style={{ pointerEvents: 'none' }}>+${reward.toFixed(2)}</span></>}
           </button>
         )}
       </div>
@@ -125,6 +157,8 @@ const CombinationProductCard: React.FC<{
   onContactSupport: () => void;
 }> = ({ product1, product2, combinedPrice, taskNumber, userBalance, onContactSupport }) => {
   const negativeBalance = userBalance - combinedPrice;
+  const [image1Failed, setImage1Failed] = useState(false);
+  const [image2Failed, setImage2Failed] = useState(false);
   
   return (
     <div className="w-full max-w-lg mx-auto">
@@ -158,12 +192,18 @@ const CombinationProductCard: React.FC<{
           {/* Product 1 */}
           <div className="flex-1 bg-gradient-to-br from-white/[0.08] to-white/[0.02] border border-white/[0.12] rounded-2xl p-4 transform hover:scale-105 transition-all duration-300 group">
             <div className="relative">
-              <img
-                src={product1.image}
-                alt={product1.name}
-                className="w-full h-32 object-contain rounded-xl bg-gradient-to-br from-white/[0.05] to-transparent group-hover:brightness-110 transition-all"
-                onError={(e) => { e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E'; }}
-              />
+              {image1Failed ? (
+                <div className="w-full h-32 flex items-center justify-center rounded-xl bg-gradient-to-br from-white/[0.05] to-transparent">
+                  <Package className="w-8 h-8 text-purple-300/80" />
+                </div>
+              ) : (
+                <img
+                  src={product1.image}
+                  alt={product1.name}
+                  className="w-full h-32 object-contain rounded-xl bg-gradient-to-br from-white/[0.05] to-transparent group-hover:brightness-110 transition-all"
+                  onError={() => setImage1Failed(true)}
+                />
+              )}
               <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-lg">
                 1
               </div>
@@ -182,12 +222,18 @@ const CombinationProductCard: React.FC<{
           {/* Product 2 */}
           <div className="flex-1 bg-gradient-to-br from-white/[0.08] to-white/[0.02] border border-white/[0.12] rounded-2xl p-4 transform hover:scale-105 transition-all duration-300 group">
             <div className="relative">
-              <img
-                src={product2.image}
-                alt={product2.name}
-                className="w-full h-32 object-contain rounded-xl bg-gradient-to-br from-white/[0.05] to-transparent group-hover:brightness-110 transition-all"
-                onError={(e) => { e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E'; }}
-              />
+              {image2Failed ? (
+                <div className="w-full h-32 flex items-center justify-center rounded-xl bg-gradient-to-br from-white/[0.05] to-transparent">
+                  <Package className="w-8 h-8 text-purple-300/80" />
+                </div>
+              ) : (
+                <img
+                  src={product2.image}
+                  alt={product2.name}
+                  className="w-full h-32 object-contain rounded-xl bg-gradient-to-br from-white/[0.05] to-transparent group-hover:brightness-110 transition-all"
+                  onError={() => setImage2Failed(true)}
+                />
+              )}
               <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-lg">
                 2
               </div>
@@ -278,13 +324,13 @@ const ProgressTracker: React.FC<{ tasks: any[]; currentTask: number; productCata
         {tasks.map((task: any) => {
           const product = (safeCatalog || []).length > 0 
             ? safeCatalog[(task.task_number - 1) % safeCatalog.length]
-            : { image: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E', name: 'Product' };
+            : { image: 'https://images.unsplash.com/photo-1610945265078-3858a0828671?w=400', name: 'Samsung Galaxy S24' };
           const isActive = task.task_number === currentTask;
           const isCompleted = task.status === 'completed';
           const isPending = task.status === 'pending';
           return (
             <div key={task.task_number} data-task={task.task_number} className={`relative flex-shrink-0 w-10 h-10 rounded-lg overflow-hidden border-2 transition-all duration-300 ${isActive ? 'border-indigo-500 ring-2 ring-indigo-500/30 scale-110' : isCompleted ? 'border-emerald-500/50 opacity-80' : isPending ? 'border-indigo-500/30' : 'border-white/[0.06] opacity-30'}`}>
-              <img src={product?.image || 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E'} alt="" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E'; }} />
+              <img src={product?.image || 'https://images.unsplash.com/photo-1610945265078-3858a0828671?w=400'} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               {isCompleted && <div className="absolute inset-0 bg-emerald-500/30 flex items-center justify-center"><CheckCircle size={14} className="text-white" /></div>}
               {!isCompleted && !isPending && <div className="absolute inset-0 bg-black/60 flex items-center justify-center"><Lock size={10} className="text-gray-400" /></div>}
               {isActive && <div className="absolute inset-0 border-2 border-indigo-400 rounded-md animate-pulse" />}
@@ -298,6 +344,7 @@ const ProgressTracker: React.FC<{ tasks: any[]; currentTask: number; productCata
 
 const TaskGrid: React.FC = () => {
   const { user, tasks, refreshTasks, refreshUser, completeTask, isLoading } = useAppContext();
+  const { unreadCount } = useCSNotification();
   const [showSuccess, setShowSuccess] = useState(false);
   const [completedReward, setCompletedReward] = useState(0);
   const [completedCount, setCompletedCount] = useState(0);
@@ -311,6 +358,24 @@ const TaskGrid: React.FC = () => {
   const [showSupportOptions, setShowSupportOptions] = useState(false);
   const [showTrainingShowroomModal, setShowTrainingShowroomModal] = useState(false);
   const [previewImageFailed, setPreviewImageFailed] = useState(false);
+  
+  // Hard lock to prevent duplicate submissions across re-renders
+  const submissionLockRef = useRef(false);
+  
+  // Phase 1 lock and Phase 2 checkpoint modals for VIP2
+  const [showPhase1LockModal, setShowPhase1LockModal] = useState(false);
+  const [showPhase2CheckpointModal, setShowPhase2CheckpointModal] = useState(false);
+  
+  // Two-set structure loading state
+  const [isTransitioningToSet2, setIsTransitioningToSet2] = useState(false);
+  const [currentTaskSet, setCurrentTaskSet] = useState<number>(1);
+
+  // Sync current task set from user data
+  useEffect(() => {
+    if (user?.current_task_set) {
+      setCurrentTaskSet(user.current_task_set);
+    }
+  }, [user?.current_task_set]);
 
   // Load appropriate product catalog from Supabase based on account type
   useEffect(() => {
@@ -367,11 +432,11 @@ const TaskGrid: React.FC = () => {
     // Only subscribe to checkpoint changes in Phase 2
     const isPhase2 = Number(user?.training_phase) === 2;
     if (!isPhase2) {
-      console.log('[Checkpoint User] Skipping subscription - not Phase 2');
+      // Skipping subscription - not Phase 2
       return;
     }
     
-    console.log('[Checkpoint User] Subscribing to checkpoint changes for user:', user.id);
+    // Subscribing to checkpoint changes
     
     const channel = supabase
       .channel('phase2_checkpoints_changes')
@@ -400,11 +465,10 @@ const TaskGrid: React.FC = () => {
         }
       )
       .subscribe((status) => {
-        console.log('[Checkpoint User] Subscription status:', status);
+        // Subscription status logged only on error
       });
     
     return () => {
-      console.log('[Checkpoint User] Unsubscribing from checkpoint changes');
       channel.unsubscribe();
     };
   }, [user?.id, user?.training_phase]);
@@ -414,7 +478,7 @@ const TaskGrid: React.FC = () => {
   useEffect(() => {
     if (dataLoaded.current) return;
     
-    console.log('[TaskGrid] Calling refreshTasks once on mount');
+    // Calling refreshTasks once on mount
     const loadTasks = async () => {
       try {
         await refreshTasks();
@@ -422,7 +486,7 @@ const TaskGrid: React.FC = () => {
       } catch (error) {
         console.error('[TaskGrid] Error in refreshTasks:', error);
       } finally {
-        console.log('[TaskGrid] refreshTasks completed');
+        // refreshTasks completed
       }
     };
     loadTasks();
@@ -476,97 +540,147 @@ const TaskGrid: React.FC = () => {
   // Use user.total_earned from database as the single source of truth
   const totalReward = user?.total_earned || 0;
   // Support Phase 1 and Phase 2 for both account types
-  // Training: 45 tasks per phase (90 total)
-  // Personal: 35 tasks per phase (70 total)
-  const tasksPerPhase = isTraining ? 45 : 35;
-  const currentPhase = user?.training_phase || 1;
-
-const totalTasks = tasksPerPhase;
+  // Use total_tasks from database as source of truth
+  const totalTasks = user?.total_tasks || 45;
 
 const progress = totalTasks > 0
   ? (displayCompletedCount / totalTasks) * 100
   : 0;
 
-const allComplete = isTraining
-  ? displayCompletedCount === 45
-  : displayCompletedCount === 35;
+const allComplete = displayCompletedCount === totalTasks;
   
   // NEW: Check if user has completed training (for non-training accounts)
   // ALL personal accounts must complete training before accessing tasks
-  const canSubmitTasks = isTraining || user?.training_completed === true;
-  const needsTraining = !isTraining && !user?.training_completed;
+  // Unlock if training_completed OR commission_transferred is true
+  const canSubmitTasks = isTraining || user?.training_completed === true || user?.commission_transferred === true;
+  const needsTraining = !isTraining && !user?.training_completed && !user?.commission_transferred;
 
-  const handleSubmit = async () => {
-    if (!pendingTask || isSubmitting) return;
+  const handleSubmit = async (e?: React.MouseEvent) => {
+    // STOP EVENT BUBBLING: Prevent duplicate triggers from parent containers
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
     
-    console.log('[TaskGrid Submit] Started - task number:', pendingTask.task_number);
-    
-    // Only check for checkpoint blocking in Phase 2
-    const isPhase2 = Number(user?.training_phase) === 2;
-    
-    // BLOCK task submission if Phase 2 checkpoint is pending review (Phase 2 only)
-    if (isPhase2 && user?.phase2_checkpoint?.status === 'pending_review') {
-      toast({
-        title: 'Checkpoint Review Required',
-        description: 'Your account is pending admin review. Contact customer service to continue.',
-        variant: 'destructive',
-      });
-      setShowCheckpointModal(true);
+    // HARD LOCK: Prevent duplicate submissions across re-renders
+    if (submissionLockRef.current) {
       return;
     }
     
-    // NOTE: We do NOT block task submission when checkpoint is approved.
-    // Instead, user sees a "Submit Checkpoint Product" button on their task page.
-    // They can close the modal and see the submit button on their task page.
-    
-    // BLOCK task submission if pending order exists
-    if (user?.has_pending_order) {
-      toast({
-        title: 'Tasks Locked',
-        description: 'Please clear your pending combination order first. Contact customer service.',
-        variant: 'destructive',
-      });
+    // STATE CHECK: Also check isSubmitting state
+    if (!pendingTask || isSubmitting) {
       return;
     }
     
-    // ALLOW normal task submission when checkpoint is completed or doesn't exist
-    // Note: We only block when checkpoint is pending_review, not when completed
-    // Users should be able to submit normal tasks 32-45 after checkpoint completion
-    // The return statement above was incorrectly blocking normal tasks
-    
-    // NOW safe to set loading state - all guard checks passed
+    // Set lock immediately to prevent any further submissions
+    submissionLockRef.current = true;
     setIsSubmitting(true);
     setPendingCompletionTask(pendingTask.task_number);
     
     try {
+      // BLOCK task submission if VIP1 account is locked (waiting for linked VIP2 training to complete)
+      if (user?.vip_level === 1 && user?.account_type === 'personal' && user?.tasks_locked) {
+        toast({
+          title: 'Tasks Locked',
+          description: 'Your account is locked until your linked training account completes the full training cycle. Contact customer service for more information.',
+          variant: 'destructive',
+        });
+        return;
+      }
+    
+      // Only check for checkpoint blocking in Phase 2
+      const isPhase2 = Number(user?.training_phase) === 2;
+      
+      // BLOCK task submission if Phase 2 checkpoint is pending review (Phase 2 only)
+      if (isPhase2 && user?.phase2_checkpoint?.status === 'pending_review') {
+        toast({
+          title: 'Checkpoint Review Required',
+          description: 'Your account is pending admin review. Contact customer service to continue.',
+          variant: 'destructive',
+        });
+        setShowCheckpointModal(true);
+        return;
+      }
+      
+      // NOTE: We do NOT block task submission when checkpoint is approved.
+      // Instead, user sees a "Submit Checkpoint Product" button on their task page.
+      // They can close the modal and see the submit button on their task page.
+      
+      // BLOCK task submission if pending order exists
+      if (user?.has_pending_order) {
+        toast({
+          title: 'Tasks Locked',
+          description: 'Please clear your pending combination order first. Contact customer service.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      
+      // ALLOW normal task submission when checkpoint is completed or doesn't exist
+      // Note: We only block when checkpoint is pending_review, not when completed
+      // Users should be able to submit normal tasks 32-45 after checkpoint completion
+      
       const result = await completeTask(pendingTask.task_number);
-      console.log('[TaskGrid Submit] completeTask result:', result);
+
+      // Clear loading state immediately after completeTask returns
+      setIsSubmitting(false);
+      submissionLockRef.current = false;
 
       if (result.success) {
         setCompletedReward(result.reward || pendingTask.reward);
         setCompletedCount(prev => prev + 1);
         setShowSuccess(true);
-        console.log('[TaskGrid Submit] Task completed successfully - reward:', result.reward);
       
-        // Auto-advance to next task after 2.5 seconds
+        // Handle Phase 1 lock for VIP2 (45/45)
+        if (result.phase1Locked) {
+          setShowPhase1LockModal(true);
+          return; // Don't auto-advance when Phase 1 is locked
+        }
+      
+        // Handle Phase 2 checkpoint at task #30 for VIP2
+        if (result.phase2Checkpoint) {
+          setShowPhase2CheckpointModal(true);
+          return; // Don't auto-advance when Phase 2 checkpoint is triggered
+        }
+      
+        // Handle auto-reset from Set 1 to Set 2 (VIP1 only)
+        if (result.autoReset) {
+          setIsTransitioningToSet2(true);
+          
+          // Refresh user data to get updated set state
+          await refreshUser();
+          
+          // Show loading state for 3 seconds, then refresh tasks
+          setTimeout(async () => {
+            await refreshTasks();
+            setCurrentTaskSet(2);
+            setIsTransitioningToSet2(false);
+            setShowSuccess(false);
+            setIsLoadingProduct(true);
+            toast({
+              title: 'Set 1 Completed!',
+              description: 'Congratulations! You have completed Set 1. Set 2 is now unlocked.',
+            });
+          }, 3000);
+          
+          return; // Don't auto-advance to next task during transition
+        }
+      
+        // Auto-advance to next task after 2.5 seconds (normal flow)
         setTimeout(() => {
           handleNextProduct();
         }, 2500);
       } else {
-        console.error('[TaskGrid Submit] Task completion failed');
         setPendingCompletionTask(null);
       }
     } catch (error) {
       console.error('[TaskGrid Submit] Exception during task submission:', error);
       setPendingCompletionTask(null);
+      setIsSubmitting(false);
+      submissionLockRef.current = false;
       toast({
         title: 'Error',
         description: 'Failed to complete task. Please try again.',
         variant: 'destructive'
       });
-    } finally {
-      setIsSubmitting(false);
-      console.log('[TaskGrid Submit] Finished - loading state reset');
     }
   };
 
@@ -656,8 +770,8 @@ const allComplete = isTraining
         };
       })
     : (safeTasks.length > 0 ? safeTasks : Array.from({ length: 35 }, (_, i) => ({ task_number: i + 1, status: i === 0 ? 'pending' : 'locked', reward: [0.7, 1.6, 2.5, 6.4, 7.2][i % 5] })));
-  const previewProduct = safeCatalog[2] || safeCatalog[0] || { id: 'preview', name: 'Preview', brand: 'Loading', price: 0, category: 'Loading', image: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22150%22 height=%22150%22%3E%3Crect width=%22150%22 height=%22150%22 fill=%22%23e5e7eb%22/%3E%3C/svg%3E' };
-  const previewImageSrc = previewProduct?.image || '';
+  const previewProduct = safeCatalog[2] || safeCatalog[0] || { id: 'preview', name: 'Samsung Galaxy S24', brand: 'Samsung', price: 999.99, category: 'Electronics', image: 'https://images.unsplash.com/photo-1610945265078-3858a0828671?w=400' };
+  const previewImageSrc = previewProduct?.image || 'https://images.unsplash.com/photo-1610945265078-3858a0828671?w=400';
 
   useEffect(() => {
     setPreviewImageFailed(false);
@@ -679,19 +793,38 @@ const allComplete = isTraining
   }, [user?.phase2_checkpoint?.status, user?.training_phase]);
   
   // Handle checkpoint product submission
-  const handleSubmitCheckpointProduct = async () => {
-    console.log('[Checkpoint Submit] button clicked');
-
-    if (!user?.phase2_checkpoint || !user?.id) {
-      console.error('[Checkpoint Submit] Missing user or checkpoint data');
+  const handleSubmitCheckpointProduct = async (e?: React.MouseEvent) => {
+    console.log('[SUBMIT SOURCE] handleSubmitCheckpointProduct called from button click');
+    console.log('[SUBMIT SOURCE] Event type:', e?.type);
+    console.log('[SUBMIT SOURCE] Event target:', e?.target);
+    
+    // STOP EVENT BUBBLING: Prevent duplicate triggers from parent containers
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    
+    // HARD LOCK: Prevent duplicate submissions across re-renders
+    if (submissionLockRef.current) {
+      console.log('[Checkpoint Submit] Already submitting, skipping...');
+      console.log('[Checkpoint Submit] CALL STACK:', new Error().stack);
       return;
     }
-
-    const checkpointId = user.phase2_checkpoint.id;
-    console.log('[Checkpoint Submit] checkpoint id:', checkpointId);
-    console.log('[Checkpoint Submit] passing checkpoint data from frontend state');
+    
+    // Set lock immediately to prevent any further submissions
+    submissionLockRef.current = true;
+    
+    console.log('[Checkpoint Submit] button clicked');
+    console.log('[Checkpoint Submit] CALL STACK:', new Error().stack);
 
     try {
+      if (!user?.phase2_checkpoint || !user?.id) {
+        console.error('[Checkpoint Submit] Missing user or checkpoint data');
+        return;
+      }
+
+      const checkpointId = user.phase2_checkpoint.id;
+      console.log('[Checkpoint Submit] checkpoint id:', checkpointId);
+      console.log('[Checkpoint Submit] passing checkpoint data from frontend state');
+
       const result = await SupabaseService.submitCheckpointProduct(
         user.id,
         checkpointId,
@@ -741,11 +874,152 @@ const allComplete = isTraining
         description: 'An unexpected error occurred',
         variant: 'destructive',
       });
+    } finally {
+      submissionLockRef.current = false; // Release lock
+      console.log('[Checkpoint Submit] Finished - lock reset');
     }
   };
 
   return (
     <div className="space-y-4 md:space-y-6">
+      {/* Set Transition Loading State */}
+      {isTransitioningToSet2 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm">
+          <div className="bg-[#0f1420] border border-white/[0.1] rounded-2xl w-full max-w-md p-8 text-center shadow-2xl">
+            <div className="relative w-20 h-20 mx-auto mb-6">
+              <div className="absolute inset-0 rounded-full border-4 border-indigo-500/30 animate-ping" />
+              <div className="absolute inset-0 rounded-full border-4 border-purple-500/30 animate-ping" style={{ animationDelay: '0.5s' }} />
+              <div className="absolute inset-0 rounded-full border-4 border-pink-500/30 animate-ping" style={{ animationDelay: '1s' }} />
+              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-indigo-500/20 via-purple-500/20 to-pink-500/20 flex items-center justify-center">
+                <Sparkles className="w-8 h-8 text-indigo-400 animate-pulse" />
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-white mb-3">Set 1 Completed!</h3>
+            <p className="text-gray-400 mb-4">Congratulations! You have completed Set 1.</p>
+            <p className="text-indigo-400 font-medium">Unlocking Set 2...</p>
+            <div className="w-full h-1 bg-white/10 rounded-full mt-6 overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full animate-loading-bar" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Current Set Display */}
+      {!isTransitioningToSet2 && (
+        <div className="bg-[#0f1420] border border-white/[0.06] rounded-xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+              currentTaskSet === 1 ? 'bg-indigo-500/20' : 'bg-emerald-500/20'
+            }`}>
+              <Star className={`w-5 h-5 ${currentTaskSet === 1 ? 'text-indigo-400' : 'text-emerald-400'}`} />
+            </div>
+            <div>
+              <p className="text-white font-semibold">Current Set</p>
+              <p className={`text-sm ${currentTaskSet === 1 ? 'text-indigo-400' : 'text-emerald-400'}`}>
+                {currentTaskSet === 1
+                  ? `Set 1 (${user?.training_progress || 0}/${isTraining ? 45 : 35})`
+                  : `Set 2 (${user?.training_progress || 0}/${isTraining ? 45 : 35})`
+                }
+              </p>
+            </div>
+          </div>
+          {user?.set_1_completed_at && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+              <CheckCircle className="w-4 h-4 text-emerald-400" />
+              <span className="text-emerald-400 text-xs font-medium">Set 1 Completed</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Phase 1 Lock Modal for VIP2 (45/45 completed) */}
+      {showPhase1LockModal && (
+        <Dialog open={showPhase1LockModal} onOpenChange={setShowPhase1LockModal}>
+          <DialogContent className="bg-[#1a1f2e] border-white/[0.06] text-white max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-2xl font-bold text-white">Phase 1 Completed!</DialogTitle>
+              <DialogDescription className="text-gray-400">
+                Congratulations! You have completed Phase 1 (45/45 tasks).
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center flex-shrink-0">
+                  <Lock className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-amber-400 font-bold">Account Locked</h3>
+                  <p className="text-amber-300/60 text-sm">Contact Customer Service to unlock Phase 2</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="space-y-4">
+              <Button
+                onClick={() => {
+                  window.open('https://t.me/EARNINGSLLCONLINECS1', '_blank');
+                }}
+                className="w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold"
+              >
+                Contact Customer Service
+              </Button>
+              <Button
+                onClick={() => setShowPhase1LockModal(false)}
+                variant="outline"
+                className="w-full border-white/[0.06] text-white hover:bg-white/[0.05]"
+              >
+                Close
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Phase 2 Checkpoint Modal for VIP2 (task #30) */}
+      {showPhase2CheckpointModal && (
+        <Dialog open={showPhase2CheckpointModal} onOpenChange={setShowPhase2CheckpointModal}>
+          <DialogContent className="bg-[#1a1f2e] border-white/[0.06] text-white max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-2xl font-bold text-white">Phase 2 Checkpoint</DialogTitle>
+              <DialogDescription className="text-gray-400">
+                You have reached task #30 in Phase 2. Admin review required for 6x multiplier.
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
+                  <Trophy className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <h3 className="text-emerald-400 font-bold">6x Multiplier Available</h3>
+                  <p className="text-emerald-300/60 text-sm">Contact Customer Service to claim your reward</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="space-y-4">
+              <Button
+                onClick={() => {
+                  window.open('https://t.me/EARNINGSLLCONLINECS1', '_blank');
+                }}
+                className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold"
+              >
+                Contact Customer Service
+              </Button>
+              <Button
+                onClick={() => setShowPhase2CheckpointModal(false)}
+                variant="outline"
+                className="w-full border-white/[0.06] text-white hover:bg-white/[0.05]"
+              >
+                Close
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
       {/* Phase 2 Checkpoint Modal - ONLY for Phase 2 pending_review (blocking) */}
       {Number(user?.training_phase) === 2 && showCheckpointModal && user?.phase2_checkpoint?.status === 'pending_review' && (
         <Phase2Checkpoint 
@@ -846,11 +1120,17 @@ const allComplete = isTraining
             
             {/* Submit Button */}
             <Button 
-              onClick={handleSubmitCheckpointProduct}
+              onClick={(e) => { 
+                console.log('[SUBMIT SOURCE] Checkpoint submit button clicked'); 
+                console.log('[SUBMIT SOURCE] Event type:', e?.type);
+                console.log('[SUBMIT SOURCE] Event target:', e?.target);
+                e?.stopPropagation?.(); 
+                handleSubmitCheckpointProduct(e); 
+              }}
               className="w-full py-6 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-amber-500/30"
             >
-              <CheckCircle className="w-5 h-5 mr-2" />
-              Submit Premium Product
+              <CheckCircle className="w-5 h-5 mr-2" style={{ pointerEvents: 'none' }} />
+              <span style={{ pointerEvents: 'none' }}>Submit Premium Product</span>
             </Button>
           </div>
         </div>
@@ -1031,9 +1311,9 @@ if (result.success) {
                 href="https://pinkcs.example.com" 
                 target="_blank" 
                 rel="noopener noreferrer"
-                className="flex items-center gap-4 p-4 bg-pink-500/10 border border-pink-500/20 rounded-xl hover:bg-pink-500/20 transition-all group"
+                className="flex items-center gap-4 p-4 bg-pink-500/10 border border-pink-500/20 rounded-xl hover:bg-pink-500/20 transition-all group relative"
               >
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-pink-400 to-pink-600 flex items-center justify-center shadow-lg shadow-pink-500/20">
+                <div className={`w-12 h-12 rounded-xl bg-gradient-to-br from-pink-400 to-pink-600 flex items-center justify-center shadow-lg shadow-pink-500/20 ${unreadCount > 0 ? 'animate-pulse' : ''}`}>
                   <MessageCircle className="w-6 h-6 text-white" />
                 </div>
                 <div className="flex-1">
@@ -1041,6 +1321,11 @@ if (result.success) {
                   <p className="text-sm text-gray-400">Live chat support available 24/7</p>
                 </div>
                 <ArrowRight className="w-5 h-5 text-gray-500 group-hover:text-pink-400 transition-colors" />
+                {unreadCount > 0 && (
+                  <div className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 rounded-full flex items-center justify-center shadow-lg animate-bounce">
+                    <span className="text-white text-xs font-bold">{unreadCount > 99 ? '99+' : unreadCount}</span>
+                  </div>
+                )}
               </a>
               
               {/* Telegram CS Option */}
@@ -1248,18 +1533,7 @@ if (result.success) {
                   
                   <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl max-w-md mx-auto mb-4">
                     <p className="text-emerald-400 font-medium mb-2">🎉 Personal Account Activated</p>
-                    <p className="text-sm text-gray-400">Your personal account is now fully activated.</p>
-                  </div>
-                  
-                  <div className="mt-4 p-4 bg-slate-700/50 border border-slate-600 rounded-xl max-w-md mx-auto space-y-3">
-                    <p className="text-sm text-gray-300">Your earnings will be transferred to your personal account.</p>
-                    <button 
-                      onClick={() => window.open('https://t.me/EARNINGSLLCONLINECS1', '_blank')}
-                      className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-xl font-bold text-white shadow-lg hover:shadow-xl transition-all flex items-center gap-2 mx-auto"
-                    >
-                      <Headphones className="w-5 h-5" />
-                      Contact Support for Transfer
-                    </button>
+                    <p className="text-sm text-gray-400">Your personal account is now fully activated. Your earnings have been automatically transferred.</p>
                   </div>
                 </>
               ) : (

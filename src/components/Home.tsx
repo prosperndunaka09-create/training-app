@@ -110,7 +110,7 @@ const Home: React.FC = () => {
               <Award className="w-6 h-6 text-white" />
             </div>
             <div>
-              <p className="text-white font-bold">VIP {user?.vip_level || 1} Member</p>
+              <p className="text-white font-bold">VIP{user?.vip_level || 1} {user?.account_type === 'training' ? 'Training' : 'Member'}</p>
               <p className="text-gray-400 text-sm">Current Level</p>
             </div>
           </div>
@@ -124,7 +124,7 @@ const Home: React.FC = () => {
           </div>
           <div className="bg-gray-800/50 rounded-xl p-4">
             <p className="text-gray-400 text-sm mb-1">Tasks Done</p>
-            <p className="text-blue-400 text-xl font-bold">{user?.tasks_completed || 0}/35</p>
+            <p className="text-blue-400 text-xl font-bold">{user?.tasks_completed || 0}/{user?.account_type === 'training' ? 45 : (user?.total_tasks || 35)}</p>
           </div>
         </div>
       </div>
@@ -141,13 +141,26 @@ const Home: React.FC = () => {
           </button>
           
           <button 
-            onClick={() => safeSetActiveTab('tasks')}
+            onClick={() => {
+              if (user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed) {
+                alert('Task area locked. Complete linked training to unlock.');
+                return;
+              }
+              safeSetActiveTab('tasks');
+            }}
             className="flex flex-col items-center gap-1 relative -top-4"
+            disabled={user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed}
           >
-            <div className="w-16 h-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center shadow-lg shadow-purple-500/30">
-              <Play className="w-8 h-8 text-white ml-1" />
+            <div className={`w-16 h-16 rounded-full flex items-center justify-center shadow-lg ${
+              user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed
+                ? 'bg-gray-600 shadow-gray-600/30 cursor-not-allowed'
+                : 'bg-gradient-to-r from-purple-500 to-pink-500 shadow-purple-500/30'
+            }`}>
+              <Play className={`w-8 h-8 ml-1 ${user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed ? 'text-gray-400' : 'text-white'}`} />
             </div>
-            <span className="text-white text-xs font-medium">Start</span>
+            <span className={`text-xs font-medium ${user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed ? 'text-gray-400' : 'text-white'}`}>
+              {user?.vip_level === 1 && user?.tasks_locked && !user?.commission_transferred && !user?.training_completed ? 'Locked' : 'Start'}
+            </span>
           </button>
           
           <button 

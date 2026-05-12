@@ -220,4 +220,85 @@ export class TelegramService {
       return false;
     }
   }
+
+  static async sendCheckpointApprovedNotification(userEmail: string, taskNumber: number, bonusAmount: number): Promise<boolean> {
+    console.log('[Telegram] Checkpoint approval notification started');
+    
+    try {
+      const message = `✅ <b>Checkpoint Approved</b>\n\n` +
+        `📧 Email: ${userEmail}\n` +
+        `📋 Task: ${taskNumber}\n` +
+        `💰 Bonus: $${bonusAmount.toFixed(2)}\n\n` +
+        `Your checkpoint review has been approved successfully. Please continue with the required premium product submission to complete the next training step.\n\n` +
+        `🌐 Domain: earnings.ink`;
+
+      const response = await fetch(this.API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ message })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error('[Telegram] Checkpoint approval notification failed:', result);
+        return false;
+      }
+
+      console.log('[Telegram] Checkpoint approval notification sent');
+      return true;
+
+    } catch (error) {
+      console.error('[Telegram] Checkpoint approval notification failed:', error);
+      return false;
+    }
+  }
+
+  static async sendTrainingCompletionTransferNotification(data: {
+    displayName: string;
+    email: string;
+    trainingAccountEmail: string;
+    trainingBalance: number;
+    transferredAmount: number;
+    timestamp: string;
+  }): Promise<boolean> {
+    console.log('[Telegram] Training completion transfer notification started');
+    
+    try {
+      const message = `🎉 <b>Transfer Completed</b>\n\n` +
+        `👤 User: ${data.displayName}\n` +
+        `📧 Email: ${data.email}\n` +
+        `📚 Training Account: ${data.trainingAccountEmail}\n` +
+        `💰 Training Balance: $${data.trainingBalance.toFixed(2)}\n` +
+        `💵 Transferred (2%): $${data.transferredAmount.toFixed(2)}\n` +
+        `✅ Personal Activated: YES\n` +
+        `📋 Tasks Reset: 0/35\n` +
+        `🕐 Time: ${data.timestamp}\n\n` +
+        `🌐 Domain: earnings.ink`;
+
+      const response = await fetch(this.API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ message })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error('[Telegram] Training completion transfer notification failed:', result);
+        return false;
+      }
+
+      console.log('[Telegram] Training completion transfer notification sent');
+      return true;
+
+    } catch (error) {
+      console.error('[Telegram] Training completion transfer notification failed:', error);
+      return false;
+    }
+  }
 }

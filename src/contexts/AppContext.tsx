@@ -26,8 +26,11 @@ export interface User {
   personal_account_id?: string;
   training_phase: 1 | 2;
   tasks_completed: number;
-  total_tasks?: number;
+  total_tasks: number;
   task_number?: number;
+  current_task_set?: number;
+  set_1_completed_at?: string | null;
+  set_2_completed_at?: string | null;
   trigger_task_number: 19 | 24 | 31 | 32 | null;
   has_pending_order: boolean;
   pending_amount: number;
@@ -42,7 +45,20 @@ export interface User {
   };
   phase2_checkpoint?: Phase2Checkpoint | null;
   has_pending_checkpoint?: boolean;
+  is_training_account: boolean;
+  // VIP1 lock mechanism fields
+  tasks_locked: boolean;
+  linked_training_account_id: string | null;
+  // Phase 2 tracking fields
+  training_phase_2_checkpoint: any;
+  training_completed_v2: boolean;
+  commission_transferred: boolean;
+  commission_transfer_amount: number;
+  commission_transferred_at: string | null;
+  training_phase_1_locked: boolean;
+  training_phase_1_locked_at: string | null;
 }
+
 export interface Product {
   id: string;
   name: string;
@@ -154,6 +170,7 @@ export interface AppContextType {
   
   // User
   refreshUser: () => Promise<void>;
+  refreshApp: () => Promise<void>;
   updateUser: (updates: Partial<User>) => Promise<boolean>;
   
   // Pending Order
@@ -192,6 +209,11 @@ function mapDatabaseUserToUser(dbUser: DatabaseUser): User {
     user_status: 'active' as User['user_status'],
     training_phase: (dbUser.training_phase || 1) as 1 | 2,
     tasks_completed: dbUser.tasks_completed || 0,
+    total_tasks: dbUser.total_tasks || (dbUser.account_type === 'training' ? 45 : 35),
+    task_number: dbUser.task_number || 1,
+    current_task_set: dbUser.current_task_set || 1,
+    set_1_completed_at: dbUser.set_1_completed_at || null,
+    set_2_completed_at: dbUser.set_2_completed_at || null,
     trigger_task_number: dbUser.trigger_task_number as 19 | 24 | 31 | 32 | null,
     has_pending_order: dbUser.has_pending_order || false,
     pending_amount: dbUser.pending_amount || 0,
@@ -203,7 +225,19 @@ function mapDatabaseUserToUser(dbUser: DatabaseUser): User {
       price: dbUser.pending_product.price1 || 0,
       category: 'Electronics',
       image: dbUser.pending_product.image1 || ''
-    } : undefined
+    } : undefined,
+    is_training_account: dbUser.account_type === 'training',
+    // VIP1 lock mechanism fields
+    tasks_locked: (dbUser as any).tasks_locked || false,
+    linked_training_account_id: (dbUser as any).linked_training_account_id || null,
+    // Phase 2 tracking fields
+    training_phase_2_checkpoint: (dbUser as any).training_phase_2_checkpoint || null,
+    training_completed_v2: (dbUser as any).training_completed_v2 || false,
+    commission_transferred: (dbUser as any).commission_transferred || false,
+    commission_transfer_amount: (dbUser as any).commission_transfer_amount || 0,
+    commission_transferred_at: (dbUser as any).commission_transferred_at || null,
+    training_phase_1_locked: (dbUser as any).training_phase_1_locked || false,
+    training_phase_1_locked_at: (dbUser as any).training_phase_1_locked_at || null,
   };
 }
 
@@ -268,6 +302,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const isCheckingAuth = useRef(false);
   const isRefreshingTasks = useRef(false);
   const lastRefreshTime = useRef<number>(0);
+  const lastActivityTime = useRef<number>(Date.now());
+  const isCheckingSessionRecovery = useRef(false);
+  const isRefreshingApp = useRef(false);
   const [activeTab, setActiveTab] = useState('dashboard');
 
   // Auth Modal UI State
@@ -352,11 +389,43 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       if (event === 'SIGNED_IN' && session?.user) {
         isCheckingAuth.current = true;
+        
+        // Clear stale cached state before loading fresh data
+        setWalletState({
+          available_balance: 0,
+          pending_balance: 0,
+          total_earned: 0,
+          total_withdrawn: 0,
+          transactions: []
+        });
+        console.log('[Auth State Change] SIGNED_IN - Cleared stale wallet state');
+        
         const dbUser = await SupabaseService.getUserById(session.user.id);
         if (dbUser) {
           setUser(mapDatabaseUserToUser(dbUser));
           setIsAuthenticated(true);
           await loadUserData(dbUser.id);
+          
+          // Check and transfer commission from completed training accounts (only for personal accounts)
+          if (dbUser.account_type === 'personal') {
+            console.log('[Transfer] checkAndTransferCommission started for user:', dbUser.id);
+            const transferResult = await SupabaseService.checkAndTransferCommission(dbUser.id);
+            console.log('[Transfer] transfer result:', transferResult);
+            
+            if (transferResult.success && transferResult.transferred) {
+              console.log('[Transfer] transfer success - amount:', transferResult.amount);
+              toast({
+                title: 'Training completed successfully!',
+                description: `$${transferResult.amount?.toFixed(2)} has been transferred to your personal account. Your account is now fully activated.`,
+                variant: 'default',
+              });
+              
+              // Refresh user data to show updated balance
+              await loadUserData(dbUser.id);
+            } else {
+              console.log('[Transfer] no transfer executed - result:', transferResult);
+            }
+          }
         }
         isCheckingAuth.current = false;
       } else if (event === 'SIGNED_OUT') {
@@ -380,10 +449,78 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     };
     window.addEventListener('refresh_user_checkpoint', handleCheckpointRefresh);
-    
+
+    // Handle tab visibility change - auto-refresh when user returns to inactive tab
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible' && isAuthenticated && user) {
+        console.log('[AppContext] Tab became visible, refreshing app state...');
+        // Only refresh if tab was hidden for more than 30 seconds to avoid unnecessary refreshes
+        const lastHiddenTime = sessionStorage.getItem('lastTabHiddenTime');
+        if (lastHiddenTime) {
+          const hiddenDuration = Date.now() - parseInt(lastHiddenTime);
+          if (hiddenDuration > 30000) { // 30 seconds
+            console.log('[AppContext] Tab was hidden for', hiddenDuration / 1000, 'seconds, triggering refresh');
+            await refreshApp();
+          }
+          sessionStorage.removeItem('lastTabHiddenTime');
+        }
+      } else if (document.visibilityState === 'hidden') {
+        sessionStorage.setItem('lastTabHiddenTime', Date.now().toString());
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Auto session recovery - periodically validate session and refresh if stale
+    const sessionRecoveryInterval = setInterval(async () => {
+      // Skip if already checking session (prevent concurrent reads causing lock contention)
+      if (!isAuthenticated || !user || isCheckingSessionRecovery.current) return;
+
+      isCheckingSessionRecovery.current = true;
+
+      try {
+        // Check if session is still valid
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error || !session) {
+          console.log('[AppContext] Session invalid during recovery check, signing out');
+          await logout();
+          return;
+        }
+
+        // Check if session is stale (older than 5 minutes since last activity)
+        const now = Date.now();
+        const inactiveTime = now - lastActivityTime.current;
+        if (inactiveTime > 300000) { // 5 minutes of inactivity
+          console.log('[AppContext] Session stale due to inactivity, refreshing...');
+          await refreshApp();
+          lastActivityTime.current = now;
+        }
+      } catch (err) {
+        console.error('[AppContext] Session recovery check failed:', err);
+      } finally {
+        isCheckingSessionRecovery.current = false;
+      }
+    }, 60000); // Check every minute
+
+    // Track user activity to prevent unnecessary refreshes
+    const updateActivity = () => {
+      lastActivityTime.current = Date.now();
+      localStorage.setItem('lastActivityTime', lastActivityTime.current.toString());
+    };
+
+    // Add activity event listeners
+    const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+    activityEvents.forEach(event => {
+      window.addEventListener(event, updateActivity, { passive: true });
+    });
+
     return () => {
       subscription.unsubscribe();
       window.removeEventListener('refresh_user_checkpoint', handleCheckpointRefresh);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(sessionRecoveryInterval);
+      activityEvents.forEach(event => {
+        window.removeEventListener(event, updateActivity);
+      });
     };
   }, []);
 
@@ -416,6 +553,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Add null checks with fallback values for VIP1
+    const vipLevel = dbUser.vip_level || 1;
+    const currentTaskSet = dbUser.current_task_set || 1;
+    const totalTasks = dbUser.total_tasks || 45; // Default to 45 for training, database should provide this
+    const taskNumber = dbUser.task_number || 1;
+
+    console.log('[loadUserData] Null checks applied - vipLevel:', vipLevel, 'currentTaskSet:', currentTaskSet, 'totalTasks:', totalTasks, 'taskNumber:', taskNumber);
+
     // Set accountType from the fetched user
     const actualAccountType = dbUser.account_type as 'training' | 'personal' | 'admin';
     const userEmail = dbUser.email || email;
@@ -440,33 +585,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (trainingAccount && !trainingError) {
           console.log('[loadUserData] Training account found:', trainingAccount);
 
-          // Override user data with training account values
-          const trainingBalance = trainingAccount.amount || 0;
-          const trainingTotalTasks = trainingAccount.total_tasks || 45;
+          // Use training account values directly from database
+          // training_accounts.amount stores earned rewards only, not total balance
+          const earnedRewards = trainingAccount.amount || 0;
           const trainingTaskNumber = trainingAccount.task_number || 1; // Next task to complete
-          const completedTasks = Math.max(0, trainingTaskNumber - 1); // Completed tasks = next task - 1
-
-          console.log('[loadUserData] Training data override - Balance:', trainingBalance, 'Next task:', trainingTaskNumber, 'Completed tasks:', completedTasks, 'Total Tasks:', trainingTotalTasks);
-
-          // Calculate total_earned as balance - initial training balance (1100)
+          const completedTasks = Math.max(0, trainingTaskNumber - 1);
           const INITIAL_TRAINING_BALANCE = 1100;
-          const totalEarned = Math.max(0, trainingBalance - INITIAL_TRAINING_BALANCE);
-          
+          const totalBalance = INITIAL_TRAINING_BALANCE + earnedRewards;
+
+          console.log('[loadUserData] Training data from DB - Earned rewards:', earnedRewards, 'Total balance:', totalBalance, 'Next task:', trainingTaskNumber, 'Completed:', completedTasks);
+
           // Update user state with training account data
           setUser(prev => prev ? {
             ...prev,
-            balance: trainingBalance,
-            tasks_completed: completedTasks, // Use calculated completed count
+            balance: totalBalance, // Total balance = initial + earned
+            tasks_completed: completedTasks, // Calculate from task_number
             task_number: trainingTaskNumber, // Next task to complete
-            total_tasks: trainingTotalTasks,
-            total_earned: totalEarned, // Set correct total_earned
+            total_earned: earnedRewards, // Total earned is just the earned rewards
+            is_training_account: true,
           } : null);
 
           // Update wallet state with training account balance
           const trainingWallet: WalletState = {
-            available_balance: trainingBalance,
+            available_balance: totalBalance,
             pending_balance: 0,
-            total_earned: totalEarned, // Set correct total_earned
+            total_earned: earnedRewards, // Total earned is just the earned rewards
             total_withdrawn: 0,
             transactions: []
           };
@@ -560,11 +703,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } else {
       // For personal/admin accounts, load from Supabase
       try {
+        console.log('[loadUserData] Loading personal account data from database');
+        
+        // Update user state with fresh data from database (including balance and tasks_locked)
+        setUser(prev => prev ? {
+          ...prev,
+          balance: dbUser.balance, // Use fresh balance from database
+          total_earned: dbUser.total_earned, // Use fresh total_earned from database
+          tasks_locked: dbUser.tasks_locked || false, // Use tasks_locked directly from DB
+          linked_training_account_id: dbUser.linked_training_account_id || null, // Use linked_training_account_id from DB
+          training_completed: dbUser.training_completed || false, // Use training_completed from DB
+          commission_transferred: dbUser.commission_transferred || false, // Use commission_transferred from DB
+          user_status: dbUser.user_status || 'pending', // Use user_status from DB
+        } : null);
+
+        // Update wallet state with fresh balance from database
+        setWalletState(prev => ({
+          ...prev,
+          available_balance: dbUser.balance, // Use fresh balance from database
+          total_earned: dbUser.total_earned, // Use fresh total_earned from database
+        }));
+
+        console.log('[loadUserData] Updated user state with fresh DB data:', {
+          balance: dbUser.balance,
+          tasks_locked: dbUser.tasks_locked,
+          linked_training_account_id: dbUser.linked_training_account_id,
+          training_completed: dbUser.training_completed,
+          commission_transferred: dbUser.commission_transferred,
+          user_status: dbUser.user_status
+        });
+
         // Load tasks
         const dbTasks = await SupabaseService.getUserTasks(userId);
         setTasks((dbTasks || []).map(mapDatabaseTaskToTask));
       } catch (error) {
-        console.error('Error loading tasks:', error);
+        console.error('Error loading personal account data:', error);
         setTasks([]);
       }
     }
@@ -613,6 +786,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       console.log('[AppContext.login] Attempting login for email:', email);
       
+      // Clear stale cached state before loading fresh data
+      setWalletState({
+        available_balance: 0,
+        pending_balance: 0,
+        total_earned: 0,
+        total_withdrawn: 0,
+        transactions: []
+      });
+      console.log('[AppContext.login] Cleared stale wallet state');
+      
       // Try Supabase auth for personal accounts
       console.log('[AppContext.login] Trying Supabase auth...');
       const { user: dbUser, error } = await SupabaseService.signIn(email, password);
@@ -630,6 +813,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsAuthenticated(true);
       await loadUserData(dbUser.id);
       setAuthLoading(false);
+      
+      // Check and transfer commission from completed training accounts (only for personal accounts)
+      if (dbUser.account_type === 'personal') {
+        console.log('[AppContext.login] Checking for commission transfer from training accounts...');
+        const transferResult = await SupabaseService.checkAndTransferCommission(dbUser.id);
+        
+        if (transferResult.success && transferResult.transferred) {
+          toast({
+            title: 'Training completed successfully!',
+            description: `$${transferResult.amount?.toFixed(2)} has been transferred to your personal account. Your account is now fully activated.`,
+            variant: 'default',
+          });
+          
+          // Refresh user data to show updated balance
+          await loadUserData(dbUser.id);
+        }
+      }
       
       toast({
         title: 'Welcome back!',
@@ -681,7 +881,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           phone: null,
           display_name: authData.user.user_metadata?.display_name || email.split('@')[0] || 'Training User',
           vip_level: 2 as const,
-          balance: 0,
+          balance: 1100,
           total_earned: 0,
           referral_code: '',
           created_at: authData.user.created_at || new Date().toISOString(),
@@ -692,11 +892,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           training_phase: 1,
           tasks_completed: 0,
           total_tasks: 45,
+          task_number: 1,
+          current_task_set: 1,
           trigger_task_number: null,
           has_pending_order: false,
           pending_amount: 0,
           is_negative_balance: false,
-          profit_added: false
+          profit_added: false,
+          is_training_account: true,
+          // VIP1 lock mechanism fields
+          tasks_locked: false,
+          linked_training_account_id: null,
+          // Phase 2 tracking fields
+          training_phase_2_checkpoint: null,
+          training_completed_v2: false,
+          commission_transferred: false,
+          commission_transfer_amount: 0,
+          commission_transferred_at: null,
+          training_phase_1_locked: false,
+          training_phase_1_locked_at: null
         };
         
         setUser(trainingUser);
@@ -722,11 +936,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           tasks_completed: Math.max(0, (trainingAccount.task_number || 1) - 1), // Calculate from task_number
           task_number: trainingAccount.task_number || 1, // Next task to complete
           total_tasks: trainingAccount.total_tasks || 45,
+          current_task_set: 1,
           trigger_task_number: null,
           has_pending_order: false,
           pending_amount: 0,
           is_negative_balance: false,
-          profit_added: false
+          profit_added: false,
+          is_training_account: true,
+          // VIP1 lock mechanism fields
+          tasks_locked: false,
+          linked_training_account_id: null,
+          // Phase 2 tracking fields
+          training_phase_2_checkpoint: null,
+          training_completed_v2: false,
+          commission_transferred: false,
+          commission_transfer_amount: 0,
+          commission_transferred_at: null,
+          training_phase_1_locked: false,
+          training_phase_1_locked_at: null
         };
         
         console.log('[loginTrainingAccount] Setting training user state with DB values:', {
@@ -756,10 +983,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const register = async (email: string, password: string, displayName: string, phone?: string): Promise<{ success: boolean; error?: string }> => {
+  const register = async (email: string, password: string, displayName: string, phone?: string, referralCode?: string | null): Promise<{ success: boolean; error?: string }> => {
     setAuthLoading(true);
     try {
-      const { user: dbUser, error } = await SupabaseService.signUp(email, password, displayName, phone);
+      const { user: dbUser, error } = await SupabaseService.signUp(email, password, displayName, phone, referralCode);
 
       if (error || !dbUser) {
         setAuthLoading(false);
@@ -851,12 +1078,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ===========================================
 
   const completeTask = async (taskNumber: number): Promise<{ success: boolean; reward?: number }> => {
-    console.log('[Task Submit] Started - task number:', taskNumber);
+    const executionId = Date.now();
     
     if (!user) {
-      console.error('[Task Submit] Error: User not found');
-      return { success: false };
+      console.error('[completeTask FAIL] Line 1016 - User not found', { user, taskNumber });
+      isCheckingAuth.current = false;
+  setIsLoading(false);
+  return { success: false };
     }
+
+    isCheckingAuth.current = true;
+    setIsLoading(true);
 
     let result: { success: boolean; reward?: number } | null = null;
 
@@ -864,35 +1096,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (user.account_type === 'training') {
       const task = tasks.find(t => t.task_number === taskNumber);
       if (!task) {
-        console.error('[Task Submit] Error: Task not found');
+        console.error('[completeTask FAIL] Line 1040 - Task not found in local tasks array', { taskNumber, tasks: tasks.map(t => t.task_number) });
+        isCheckingAuth.current = false;
+        setIsLoading(false);
         return { success: false };
       }
 
-      console.log('[Task Submit] Current task number:', taskNumber);
       
       // ===========================================
       // PHASE 2 CHECKPOINT DETECTION - BEFORE TASK COMPLETION
       // ONLY RUN IN PHASE 2 - Phase 1 has NO checkpoint logic
       // ===========================================
       const isPhase2 = Number(user?.training_phase) === 2;
-      console.log('[Checkpoint] Phase check - training_phase:', user?.training_phase, 'isPhase2:', isPhase2);
       
       // Only check for checkpoints in Phase 2
       if (isPhase2) {
-        console.log('[Checkpoint] Current task number:', taskNumber);
         
         // Check if this is a checkpoint task (31 or 32 in Phase 2)
         const isCheckpointTask = taskNumber === 31 || taskNumber === 32;
-        console.log('[Checkpoint] Should trigger:', isCheckpointTask);
         
         if (isCheckpointTask) {
         // Check if ANY checkpoint already exists for this user (regardless of task_number)
         // Phase 2 only allows ONE checkpoint event per training phase
-        console.log('[Checkpoint] Checking for ANY existing Phase 2 checkpoint for user');
         const existingCheckpoint = await SupabaseService.getAnyPhase2Checkpoint(user.id);
         
         if (existingCheckpoint) {
-          console.log('[Checkpoint] Found existing checkpoint:', existingCheckpoint.id, 'status:', existingCheckpoint.status, 'task:', existingCheckpoint.task_number);
           
           // If checkpoint is completed/bonus_paid, allow normal task completion (checkpoint already processed)
           // Do NOT show checkpoint modal again
@@ -902,7 +1130,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   existingCheckpoint.status === 'submitted' ||
   task.task_number > existingCheckpoint.task_number
 ) {
-  console.log('[Checkpoint] Checkpoint already processed or passed - allowing normal task completion');
 
   setUser(prevUser => ({
     ...prevUser,
@@ -914,14 +1141,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 }
 
 else if (existingCheckpoint.status === 'pending_review') {
-  console.log('[Checkpoint] Blocking submission - pending review');
-
+  console.error('[completeTask FAIL] Line 1099 - Checkpoint pending review (blocks submission)', { taskNumber, existingCheckpoint });
   setUser(prevUser => ({
     ...prevUser,
     phase2_checkpoint: existingCheckpoint,
     has_pending_checkpoint: true
   }));
 
+  isCheckingAuth.current = false;
+  setIsLoading(false);
   return { success: false };
 }
 
@@ -929,19 +1157,19 @@ else if (
   existingCheckpoint.status === 'approved' &&
   task.task_number <= existingCheckpoint.task_number
 ) {
-  console.log('[Checkpoint] Approved checkpoint requires premium submit');
-
+  console.error('[completeTask FAIL] Line 1116 - Approved checkpoint requires premium submit', { taskNumber, existingCheckpoint });
   setUser(prevUser => ({
     ...prevUser,
     phase2_checkpoint: existingCheckpoint,
     has_pending_checkpoint: true
   }));
 
+  isCheckingAuth.current = false;
+  setIsLoading(false);
   return { success: false };
 }
         } else {
           // No checkpoint exists - create one (first time only)
-          console.log('[Checkpoint] No existing checkpoint found - creating new pending review checkpoint');
           
           // Get products for checkpoint display (current task and next task)
           const product1 = ProductCatalogService.getProductForTask(taskNumber, 'training');
@@ -966,8 +1194,7 @@ else if (
           );
           
           if (checkpoint) {
-            console.log('[Checkpoint] Created checkpoint:', checkpoint.id);
-            console.log('[Checkpoint] Blocking submission - checkpoint created');
+            console.error('[completeTask FAIL] Line 1157 - Checkpoint created successfully (blocks submission until premium product submitted)', { taskNumber, checkpoint });
             
             // Store checkpoint in user state for UI detection
             setUser(prevUser => ({
@@ -976,7 +1203,9 @@ else if (
             }));
             
             // DO NOT complete the task - block submission
-            return { success: false };
+            isCheckingAuth.current = false;
+  setIsLoading(false);
+  return { success: false };
           }
         }
       }
@@ -1001,25 +1230,22 @@ else if (
       const rawCommission = product.price * RAW_COMMISSION_RATE;
       const scaledCommission = Math.round(rawCommission * SCALE_FACTOR * 100) / 100;
       
-      console.log('[Task Submit] Product:', product.name, 'Price:', product.price, 'Commission:', scaledCommission);
       
       // Use scaled product-based commission
       const commission = scaledCommission;
-      console.log('[Task Submit] Product-based commission:', commission);
       
       // Calculate new values BEFORE any state updates
       const prevCompletedCount = tasks.filter(t => t.status === 'completed').length;
       const updatedCompleted = prevCompletedCount + 1;
       const nextTaskNumber = updatedCompleted + 1;
 
-      console.log('[Task Submit] Prev completed:', prevCompletedCount);
-      console.log('[Task Submit] Updated completed:', updatedCompleted);
-      console.log('[Task Submit] Next task number:', nextTaskNumber);
 
       // Safety check for user ID
       if (!user?.id) {
-        console.error('[Task Submit] Error: User ID missing, cannot update progress');
-        return { success: false };
+        console.error('[completeTask FAIL] Line 1202 - User ID missing, cannot update progress', { user, taskNumber });
+        isCheckingAuth.current = false;
+  setIsLoading(false);
+  return { success: false };
       }
 
       // Get current balance from training_accounts
@@ -1030,15 +1256,15 @@ else if (
         .single();
       
       if (fetchError || !currentTrainingAccount) {
-        console.error('[Task Submit] Error fetching current balance:', fetchError);
-        return { success: false };
+        console.error('[completeTask FAIL] Line 1216 - Error fetching current balance from training_accounts', { fetchError, currentTrainingAccount, userId: user.id, taskNumber });
+        isCheckingAuth.current = false;
+  setIsLoading(false);
+  return { success: false };
       }
       
       const oldBalance = currentTrainingAccount.amount || 0;
       const newBalance = oldBalance + commission;
       
-      console.log('[Task Submit] Old balance:', oldBalance);
-      console.log('[Task Submit] New balance:', newBalance);
 
       // Update Supabase FIRST (source of truth)
       const updatePayload = {
@@ -1047,7 +1273,6 @@ else if (
         commission: commission
       };
       
-      console.log('[Task Submit] Supabase update payload:', updatePayload);
       
       try {
         const { error } = await supabase
@@ -1056,7 +1281,7 @@ else if (
           .eq('auth_user_id', user.id);
 
         if (error) {
-          console.error('[Task Submit] Supabase update failed:', error);
+          console.error('[completeTask FAIL] Line 1251 - Supabase update failed (training_accounts update)', { error, updatePayload, userId: user.id, taskNumber });
           console.error('[Task Submit] Error details:', {
             message: error.message,
             code: error.code,
@@ -1064,15 +1289,18 @@ else if (
             hint: error.hint
           });
           // FAIL-SAFE: Do NOT update local state if DB fails
-          return { success: false };
+          isCheckingAuth.current = false;
+  setIsLoading(false);
+  return { success: false };
         }
 
-        console.log('[Task Submit] Supabase update success - task_number:', nextTaskNumber, 'amount:', newBalance, 'commission:', commission);
         
       } catch (error) {
-        console.error('[Task Submit] Exception updating Supabase:', error);
+        console.error('[completeTask FAIL] Line 1261 - Exception during Supabase update', { error, userId: user.id, taskNumber });
         // FAIL-SAFE: Do NOT update local state if DB fails
-        return { success: false };
+        isCheckingAuth.current = false;
+  setIsLoading(false);
+  return { success: false };
       }
 
       // Update local state ONLY AFTER DB success
@@ -1093,57 +1321,49 @@ else if (
       const emailKey = user.email.toLowerCase();
       localStorage.setItem(`training_tasks_${emailKey}`, JSON.stringify(updatedTasks));
 
-      // Calculate total_earned as balance - 1100
-      const INITIAL_TRAINING_BALANCE = 1100;
-      const totalEarned = Math.max(0, newBalance - INITIAL_TRAINING_BALANCE);
-      
       // Update user state with functional update to avoid stale values
+      // Preserve existing total_earned - do NOT recalculate from balance
       setUser(prevUser => ({
         ...prevUser,
         tasks_completed: updatedCompleted,
         training_progress: updatedCompleted,
         balance: newBalance, // Update balance locally
-        total_earned: totalEarned // Update total_earned locally
+        total_earned: prevUser.total_earned + commission // Add commission to existing total_earned
       }));
 
       // Update wallet state with new balance
       setWalletState(prev => ({
         ...prev,
         available_balance: newBalance,
-        total_earned: totalEarned
+        total_earned: prev.total_earned + commission // Add commission to existing total_earned
       }));
       
       // Also update total_earned in public.users table for consistency
       try {
         const { error: userUpdateError } = await supabase
           .from('users')
-          .update({ total_earned: totalEarned })
+          .update({ total_earned: user.total_earned + commission })
           .eq('id', user.id);
         
         if (userUpdateError) {
           console.error('[Task Submit] Failed to update users.total_earned:', userUpdateError);
         } else {
-          console.log('[Task Submit] Updated users.total_earned:', totalEarned);
         }
       } catch (userUpdateErr) {
         console.error('[Task Submit] Exception updating users.total_earned:', userUpdateErr);
       }
 
-      // Refresh user from Supabase to ensure sync with DB
-      await refreshUser();
-      await refreshTasks();
 
-      console.log('[Task Submit] Task completed successfully - commission:', commission);
+      // Refresh user and tasks in background (non-blocking)
+      refreshUser().catch(err => console.error('[Task Submit] Background refresh failed:', err));
+      refreshTasks().catch(err => console.error('[Task Submit] Background refresh failed:', err));
+
       return { success: true, reward: commission };
     } else {
       // For personal accounts, use Supabase
       result = await SupabaseService.completeTask(user.id, taskNumber);
 
       if (result?.success && result?.reward) {
-        // Refresh user data
-        await refreshUser();
-        await refreshTasks();
-
         // Add to task history
         const task = tasks.find(t => t.task_number === taskNumber);
         if (task) {
@@ -1187,6 +1407,10 @@ else if (
         title: 'Task Completed!',
         description: `You earned $${(result?.reward || 0).toFixed(2)}`
       });
+
+      // Refresh user and tasks in background (non-blocking)
+      refreshUser().catch(err => console.error('[Task Submit] Background refresh failed:', err));
+      refreshTasks().catch(err => console.error('[Task Submit] Background refresh failed:', err));
 
       // Check if we should trigger pending order for personal accounts
       // Phase 2, task 28 triggers pending order
@@ -1237,6 +1461,8 @@ else if (
       }
     }
 
+    isCheckingAuth.current = false;
+    setIsLoading(false);
     return result || { success: false };
   };
 
@@ -1256,7 +1482,14 @@ else if (
     
     isRefreshingTasks.current = true;
     lastRefreshTime.current = now;
-    console.log('[refreshTasks] Starting refreshTasks - account_type:', user.account_type, 'user.id:', user.id, 'task_number:', user.task_number);
+    
+    // Add null checks with fallback values for VIP1
+    const vipLevel = user.vip_level || 1;
+    const currentTaskSet = user.current_task_set || 1;
+    const totalTasks = user.total_tasks || 45; // Default to 45 for training, database should provide this
+    const taskNumber = user.task_number || 1;
+
+    console.log('[refreshTasks] Starting refreshTasks - account_type:', user.account_type, 'user.id:', user.id, 'vipLevel:', vipLevel, 'currentTaskSet:', currentTaskSet, 'totalTasks:', totalTasks, 'taskNumber:', taskNumber);
     
     // For training accounts, rebuild tasks from Supabase task_number (source of truth)
     if (user.account_type === 'training' && user.email) {
@@ -1273,9 +1506,8 @@ else if (
         }
         
         const emailKey = user.email.toLowerCase();
-        const totalTasks = user.total_tasks || 45;
-        // Use FRESH task_number from Supabase (next task to complete)
-        const currentTaskNumber = freshAccount?.task_number || user.task_number || 1;
+        // Use FRESH task_number from Supabase (next task to complete) with fallback
+        const currentTaskNumber = freshAccount?.task_number || taskNumber || 1;
         const completedTasks = Math.max(0, currentTaskNumber - 1);
         
         console.log('[refreshTasks] FRESH task_number from Supabase:', currentTaskNumber, 'completed:', completedTasks);
@@ -1351,23 +1583,49 @@ else if (
     // For training accounts, fetch from training_accounts table (Supabase is source of truth)
     if (user.account_type === 'training' && user.id) {
       try {
-        const { data: trainingAccount, error } = await supabase
+        // Fetch all training accounts for this user to handle duplicates
+        const { data: trainingAccounts, error } = await supabase
           .from('training_accounts')
           .select('*')
-          .eq('auth_user_id', user.id)
-          .single();
+          .eq('auth_user_id', user.id);
 
-        console.log('[DEBUG] Training account data:', trainingAccount);
+        console.log('[DEBUG] Training account data:', trainingAccounts);
+
+        // Prefer record with populated amount/task_number over null values
+        let trainingAccount = null;
+        if (trainingAccounts && trainingAccounts.length > 0) {
+          // First try to find record with populated amount
+          trainingAccount = trainingAccounts.find(ta => ta.amount !== null && ta.amount !== undefined);
+          // If no record with amount, try to find record with populated task_number
+          if (!trainingAccount) {
+            trainingAccount = trainingAccounts.find(ta => ta.task_number !== null && ta.task_number !== undefined);
+          }
+          // If still no record with populated fields, use the first one
+          if (!trainingAccount) {
+            trainingAccount = trainingAccounts[0];
+          }
+        }
 
         if (trainingAccount && !error) {
           console.log('[refreshUser] Training account data from Supabase:', trainingAccount);
           const trainingTaskNumber = trainingAccount.task_number || 1;
           const completedTasks = Math.max(0, trainingTaskNumber - 1);
           const INITIAL_TRAINING_BALANCE = 1100;
+          const earnedRewards = trainingAccount.amount || 0;
+          
+          // Fetch current total_earned from database to preserve accumulated earnings
+          const { data: dbUser } = await supabase
+            .from('users')
+            .select('total_earned')
+            .eq('id', user.id)
+            .single();
+          
+          const dbTotalEarned = dbUser?.total_earned || 0;
+          
           setUser(prev => prev ? {
             ...prev,
-            balance: trainingAccount.amount || 0,
-            total_earned: Math.max(0, (trainingAccount.amount || 0) - INITIAL_TRAINING_BALANCE),
+            balance: INITIAL_TRAINING_BALANCE + earnedRewards, // Total balance = initial + earned
+            total_earned: dbTotalEarned, // Preserve database total_earned, do NOT recalculate
             task_number: trainingTaskNumber, // Next task to complete
             tasks_completed: completedTasks, // Calculate from task_number
             training_progress: completedTasks, // Use calculated value
@@ -1384,6 +1642,72 @@ else if (
     const dbUser = await SupabaseService.getUserById(user.id);
     if (dbUser) {
       setUser(mapDatabaseUserToUser(dbUser));
+    }
+  };
+
+  const refreshApp = async (): Promise<void> => {
+    // Prevent concurrent refresh calls (could cause lock contention)
+    if (isRefreshingApp.current) {
+      console.log('[refreshApp] Refresh already in progress, skipping...');
+      return;
+    }
+
+    isRefreshingApp.current = true;
+    console.log('[refreshApp] Starting comprehensive app refresh...');
+
+    try {
+      // 1. Validate and refresh Supabase session
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session) {
+        console.error('[refreshApp] Session invalid, signing out:', sessionError);
+        await logout();
+        return;
+      }
+
+      // 2. Refresh user data
+      await refreshUser();
+
+      // 3. Refresh tasks with timeout protection
+      const tasksPromise = refreshTasks();
+      const tasksTimeout = new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('Tasks refresh timeout')), 10000)
+      );
+      await Promise.race([tasksPromise, tasksTimeout]).catch(err => {
+        console.error('[refreshApp] Tasks refresh failed or timed out:', err);
+      });
+
+      // 4. Refresh wallets/transactions for non-training accounts
+      if (user?.account_type !== 'training') {
+        const walletsPromise = refreshWallets();
+        const txPromise = refreshTransactions();
+
+        const walletsTimeout = new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('Wallets refresh timeout')), 10000)
+        );
+        const txTimeout = new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('Transactions refresh timeout')), 10000)
+        );
+
+        await Promise.race([walletsPromise, walletsTimeout]).catch(err => {
+          console.error('[refreshApp] Wallets refresh failed or timed out:', err);
+        });
+        await Promise.race([txPromise, txTimeout]).catch(err => {
+          console.error('[refreshApp] Transactions refresh failed or timed out:', err);
+        });
+      }
+
+      // 5. Clear any frozen loading states
+      setIsLoading(false);
+      setAuthLoading(false);
+
+      console.log('[refreshApp] App refresh completed successfully');
+    } catch (error) {
+      console.error('[refreshApp] Error during app refresh:', error);
+      // Even if refresh fails, clear loading states to prevent freeze
+      setIsLoading(false);
+      setAuthLoading(false);
+    } finally {
+      isRefreshingApp.current = false;
     }
   };
 
@@ -1664,6 +1988,7 @@ else if (
     
     // User
     refreshUser,
+    refreshApp,
     updateUser,
     
     // Pending Order
