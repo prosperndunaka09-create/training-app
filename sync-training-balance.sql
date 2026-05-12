@@ -2,10 +2,10 @@
 -- This fixes existing training accounts where users.balance is out of sync with training_accounts.amount
 
 -- Update users.balance for all training accounts to include initial capital + earned rewards
+-- Note: total_earned should remain as training_accounts.amount (earned rewards only, not including initial capital)
 UPDATE users
 SET
   balance = 1100 + COALESCE(training_accounts.amount, 0),
-  total_earned = 1100 + COALESCE(training_accounts.amount, 0),
   updated_at = NOW()
 FROM training_accounts
 WHERE users.id = training_accounts.auth_user_id

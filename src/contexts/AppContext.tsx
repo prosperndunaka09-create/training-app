@@ -585,27 +585,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (trainingAccount && !trainingError) {
           console.log('[loadUserData] Training account found:', trainingAccount);
 
-          // Use users.balance as source of truth - should already include initial capital + earned
+          // Use users.balance for total balance (includes initial + earned), but total_earned should only be earned rewards
           const trainingTaskNumber = trainingAccount.task_number || 1; // Next task to complete
           const completedTasks = Math.max(0, trainingTaskNumber - 1);
+          const earnedRewards = trainingAccount.amount || 0; // Only earned rewards, not including initial capital
 
-          console.log('[loadUserData] Training data from DB - Balance from users table:', dbUser.balance, 'Next task:', trainingTaskNumber, 'Completed:', completedTasks);
+          console.log('[loadUserData] Training data from DB - Balance from users table:', dbUser.balance, 'Earned rewards:', earnedRewards, 'Next task:', trainingTaskNumber, 'Completed:', completedTasks);
 
           // Update user state with training account data
           setUser(prev => prev ? {
             ...prev,
-            balance: dbUser.balance, // Use balance from users table (should include initial + earned)
+            balance: dbUser.balance, // Use balance from users table (includes initial + earned)
             tasks_completed: completedTasks, // Calculate from task_number
             task_number: trainingTaskNumber, // Next task to complete
-            total_earned: dbUser.total_earned, // Use total_earned from users table
+            total_earned: earnedRewards, // Use only earned rewards from training_accounts.amount
             is_training_account: true,
           } : null);
 
-          // Update wallet state with training account balance from users table
+          // Update wallet state with training account balance
           const trainingWallet: WalletState = {
-            available_balance: dbUser.balance, // Use balance from users table (should include initial + earned)
+            available_balance: dbUser.balance, // Use balance from users table (includes initial + earned)
             pending_balance: 0,
-            total_earned: dbUser.total_earned, // Use total_earned from users table
+            total_earned: earnedRewards, // Use only earned rewards from training_accounts.amount
             total_withdrawn: 0,
             transactions: []
           };
@@ -1613,21 +1614,21 @@ else if (
           console.log('[refreshUser] Training account data from Supabase:', trainingAccount);
           const trainingTaskNumber = trainingAccount.task_number || 1;
           const completedTasks = Math.max(0, trainingTaskNumber - 1);
+          const earnedRewards = trainingAccount.amount || 0; // Only earned rewards, not including initial capital
 
-          // Fetch current balance and total_earned from database to use as source of truth
+          // Fetch current balance from database to use as source of truth
           const { data: dbUser } = await supabase
             .from('users')
-            .select('balance, total_earned')
+            .select('balance')
             .eq('id', user.id)
             .single();
 
           const dbBalance = dbUser?.balance || 0;
-          const dbTotalEarned = dbUser?.total_earned || 0;
 
           setUser(prev => prev ? {
             ...prev,
-            balance: dbBalance, // Use balance from users table (should include initial + earned)
-            total_earned: dbTotalEarned, // Use total_earned from users table (should include initial + earned)
+            balance: dbBalance, // Use balance from users table (includes initial + earned)
+            total_earned: earnedRewards, // Use only earned rewards from training_accounts.amount
             task_number: trainingTaskNumber, // Next task to complete
             tasks_completed: completedTasks, // Calculate from task_number
             training_progress: completedTasks, // Use calculated value

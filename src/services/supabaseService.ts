@@ -1075,11 +1075,12 @@ export class SupabaseService {
         // Also update users table - including balance to keep in sync with training_accounts + initial capital
         const INITIAL_TRAINING_BALANCE = 1100;
         const newBalance = INITIAL_TRAINING_BALANCE + trainingAccount.amount + reward; // Full balance = initial + earned
+        const newEarnedRewards = trainingAccount.amount + reward; // Only earned rewards
         const { error: userStatsError } = await supabase
           .from('users')
           .update({
             balance: newBalance, // Full training balance = initial capital + earned rewards
-            total_earned: newBalance, // Full training balance = initial capital + earned rewards
+            total_earned: newEarnedRewards, // Only earned rewards (not including initial capital)
             tasks_completed: newTasksCompleted,
             training_progress: trainingProgress,
             updated_at: new Date().toISOString()
@@ -3850,15 +3851,16 @@ export class SupabaseService {
 
       const currentBalance = freshUser?.balance || 0;
       const currentTotalEarned = freshUser?.total_earned || 0;
-      
+
       // Transfer commission to personal account and activate full features
-      // SET personal balance to commission amount only (do not add to existing balance)
-      // This automatically clears any legacy balance values
+      // ADD commission to existing balance
+      const newPersonalBalance = currentBalance + commissionAmount;
+      const newPersonalTotalEarned = currentTotalEarned + commissionAmount;
       const { error: transferError } = await supabase
         .from('users')
         .update({
-          balance: commissionAmount, // SET to commission amount only, not add (clears legacy balance)
-          total_earned: commissionAmount, // SET total_earned to commission amount only (clears legacy)
+          balance: newPersonalBalance, // ADD commission to existing balance
+          total_earned: newPersonalTotalEarned, // ADD commission to existing total_earned
           user_status: 'active', // Activate personal account full features
           training_completed: true, // Mark personal account as having completed training
           updated_at: new Date().toISOString()
