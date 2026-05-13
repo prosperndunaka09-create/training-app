@@ -929,9 +929,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Fetch user data from users table to get balance (should include initial + earned)
         const { data: userData } = await supabase
           .from('users')
-          .select('balance, total_earned')
+          .select('*')
           .eq('id', authData.user.id)
           .single();
+
+        // Check if training is completed
+        const isTrainingCompleted = userData?.training_completed === true || userData?.training_completed_v2 === true;
+
+        // For completed training, use total_earned from training_accounts.amount (earned rewards only)
+        // For in-progress training, use users.total_earned
+        const totalEarned = isTrainingCompleted
+          ? (trainingAccount.amount || 0) // Only earned rewards from training_accounts
+          : (userData?.total_earned || 0); // Use users table for in-progress
 
         // Use training account data from database
         const trainingUser: User = {
@@ -941,14 +950,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           display_name: trainingAccount.email.split('@')[0] || 'Training User',
           vip_level: 2 as const,
           balance: userData?.balance || 0, // Use balance from users table (should include initial + earned)
-          total_earned: userData?.total_earned || 0, // Use total_earned from users table (should include initial + earned)
+          total_earned: totalEarned, // Use calculated total_earned based on training completion status
           referral_code: '',
           created_at: trainingAccount.created_at,
           account_type: 'training',
-          training_completed: trainingAccount.completed || false,
+          training_completed: isTrainingCompleted,
           training_progress: 0, // No progress column in DB
           user_status: 'active',
-          training_phase: 1,
+          training_phase: userData?.training_phase || 1,
           tasks_completed: Math.max(0, (trainingAccount.task_number || 1) - 1), // Calculate from task_number
           task_number: trainingAccount.task_number || 1, // Next task to complete
           total_tasks: trainingAccount.total_tasks || 45,
@@ -964,21 +973,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           linked_training_account_id: null,
           // Phase 2 tracking fields
           training_phase_2_checkpoint: null,
-          training_completed_v2: false,
-          commission_transferred: false,
-          commission_transfer_amount: 0,
-          commission_transferred_at: null,
+          training_completed_v2: userData?.training_completed_v2 || false,
+          commission_transferred: userData?.commission_transferred || false,
+          commission_transfer_amount: userData?.commission_transfer_amount || 0,
+          commission_transferred_at: userData?.commission_transferred_at || null,
           training_phase_1_locked: false,
           training_phase_1_locked_at: null
         };
-        
+
         console.log('[loginTrainingAccount] Setting training user state with DB values:', {
           email: trainingUser.email,
           balance: trainingUser.balance,
+          total_earned: trainingUser.total_earned,
+          training_completed: trainingUser.training_completed,
           tasks_completed: trainingUser.tasks_completed,
           total_tasks: trainingUser.total_tasks
         });
-        
+
         setUser(trainingUser);
         setIsAuthenticated(true);
         await loadUserData(trainingUser.id, 'training', trainingUser.email);
