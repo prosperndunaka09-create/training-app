@@ -553,18 +553,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Check if training is completed - if so, skip ALL localStorage wallet loading and use Supabase only
+    const isTrainingCompleted = dbUser.training_completed === true || dbUser.training_completed_v2 === true;
+    const isTraining = dbUser.account_type === 'training';
+
+    if (isTrainingCompleted && isTraining) {
+      console.log('[loadUserData] Training completed - skipping ALL localStorage wallet loading, using Supabase only');
+      // Clear any localStorage wallet data for completed training
+      const userEmail = dbUser.email || email;
+      const emailKey = userEmail?.toLowerCase();
+      if (emailKey) {
+        localStorage.removeItem(`training_wallet_${emailKey}`);
+      }
+
+      // Set wallet state directly from Supabase data
+      const completedWallet: WalletState = {
+        available_balance: dbUser.balance,
+        total_earned: dbUser.total_earned,
+        pending_balance: 0,
+        total_withdrawn: 0,
+        transactions: []
+      };
+      setWalletState(completedWallet);
+      console.log('[loadUserData] Set walletState for completed training from Supabase:', completedWallet);
+
+      // Update user state
+      setUser(prev => prev ? {
+        ...prev,
+        balance: dbUser.balance,
+        total_earned: dbUser.total_earned,
+      } : null);
+
+      return; // EARLY RETURN - skip all localStorage logic
+    }
+
     // Add null checks with fallback values for VIP1
     const vipLevel = dbUser.vip_level || 1;
     const currentTaskSet = dbUser.current_task_set || 1;
     const totalTasks = dbUser.total_tasks || 45; // Default to 45 for training, database should provide this
     const taskNumber = dbUser.task_number || 1;
 
-    console.log('[loadUserData] Null checks applied - vipLevel:', vipLevel, 'currentTaskSet:', currentTaskSet, 'totalTasks:', totalTasks, 'taskNumber:', taskNumber);
+    console.log('[loadUserData] Null checks applied - vipLevel:', vipLevel, 'currentTaskSet:', currentTaskSet, 'totalTasks:', totalTasks, 'taskNumber': taskNumber);
 
     // Set accountType from the fetched user
     const actualAccountType = dbUser.account_type as 'training' | 'personal' | 'admin';
     const userEmail = dbUser.email || email;
-    const isTraining = actualAccountType === 'training';
 
     console.log('[loadUserData] accountType from DB:', actualAccountType, 'isTraining:', isTraining, 'userEmail:', userEmail);
 
@@ -572,18 +605,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (isTraining && userId) {
       try {
         console.log('[loadUserData] Fetching training account data for user ID:', userId);
-
-        // Check if training is completed - if so, ignore localStorage completely
-        const isTrainingCompleted = dbUser.training_completed === true || dbUser.training_completed_v2 === true;
-
-        if (isTrainingCompleted) {
-          console.log('[loadUserData] Training completed - ignoring localStorage, using Supabase only');
-          // Clear any localStorage wallet data for completed training
-          const emailKey = userEmail?.toLowerCase();
-          if (emailKey) {
-            localStorage.removeItem(`training_wallet_${emailKey}`);
-          }
-        }
 
         // Fetch training account data from Supabase using auth_user_id
         const { data: trainingAccount, error: trainingError } = await supabase
