@@ -3676,7 +3676,7 @@ export class SupabaseService {
       console.log('[EmergencyTransfer] Training account found:', trainingUser.email, 'current balance:', trainingUser.balance);
 
       const trainingBalance = trainingUser.balance;
-      const commissionAmount = trainingBalance * 0.02;
+      const commissionAmount = Math.round(trainingBalance * 0.02 * 100) / 100; // Exact 2% rounded to 2 decimals
       const remainingTrainingBalance = trainingBalance - commissionAmount;
 
       console.log('[EmergencyTransfer] Calculated commission:', commissionAmount);
@@ -3838,7 +3838,7 @@ export class SupabaseService {
       const earnedRewards = freshTraining?.amount || 0;
       const INITIAL_TRAINING_BALANCE = 1100;
       const trainingBalance = INITIAL_TRAINING_BALANCE + earnedRewards; // Full training total = initial + earned
-      const commissionAmount = trainingBalance * 0.02;
+      const commissionAmount = Math.round(trainingBalance * 0.02 * 100) / 100; // Exact 2% rounded to 2 decimals
 
       console.log('[Transfer] Processing transfer from training account:', trainingAccount.email, 'training_balance:', trainingBalance, 'commission:', commissionAmount);
 
