@@ -573,6 +573,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         console.log('[loadUserData] Fetching training account data for user ID:', userId);
 
+        // Check if training is completed - if so, ignore localStorage completely
+        const isTrainingCompleted = dbUser.training_completed === true || dbUser.training_completed_v2 === true;
+
+        if (isTrainingCompleted) {
+          console.log('[loadUserData] Training completed - ignoring localStorage, using Supabase only');
+          // Clear any localStorage wallet data for completed training
+          const emailKey = userEmail?.toLowerCase();
+          if (emailKey) {
+            localStorage.removeItem(`training_wallet_${emailKey}`);
+          }
+        }
+
         // Fetch training account data from Supabase using auth_user_id
         const { data: trainingAccount, error: trainingError } = await supabase
           .from('training_accounts')
